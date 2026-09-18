@@ -19,7 +19,6 @@ import {
   encodeModelTag,
   formatDuration,
   formatUsd,
-  parseUsd,
   txUrl,
 } from '@solvent/core';
 import type { Hex, Usdc6 } from '@solvent/core';
@@ -44,6 +43,12 @@ import { get, writeEnvFile } from '../lib/env.js';
 import { CliError } from '../lib/errors.js';
 import { findByHandle } from '../lib/indexer.js';
 import { resolveKey } from '../lib/keys.js';
+import {
+  DEFAULT_ALLOWANCE_CAP_6,
+  parseUsdc6Env,
+  parseUsdFlag,
+  UNBOUNDED_ALLOWANCE_FLOOR_6,
+} from '../lib/money.js';
 import { typedConfirm } from '../lib/prompt.js';
 import { bold, dim, ink, solvent, underline } from '../ui/color.js';
 import { fundingPanel } from '../ui/panels.js';
@@ -66,7 +71,6 @@ export const usage = `solvent spawn --handle <name>  -- five minutes to enter th
 
 const DEFAULT_MODEL = 'claude-opus-5';
 const DEFAULT_GAS_BUFFER = '0.25';
-const UNBOUNDED_FLOOR = 1n << 128n;
 const STEPS = 7;
 
 export async function run(argv: string[]): Promise<number> {
@@ -102,14 +106,16 @@ export async function run(argv: string[]): Promise<number> {
   const endpoint = str(values, 'endpoint') ?? '';
   const manifest = manifestHash(str(values, 'manifest'));
 
-  const allowanceDefault6 = BigInt(get(ctx.env, 'SOLVENT_ALLOWANCE_CAP_6') ?? '10000000');
+  const capFromEnv = get(ctx.env, 'SOLVENT_ALLOWANCE_CAP_6');
+  const allowanceDefault6 =
+    capFromEnv === undefined ? DEFAULT_ALLOWANCE_CAP_6 : parseUsdc6Env(capFromEnv, 'SOLVENT_ALLOWANCE_CAP_6');
   const allowanceArg = str(values, 'allowance');
-  const allowance6: Usdc6 = allowanceArg === undefined ? allowanceDefault6 : parseUsd(allowanceArg);
+  const allowance6: Usdc6 = allowanceArg === undefined ? allowanceDefault6 : parseUsdFlag(allowanceArg, 'allowance');
   if (allowance6 <= 0n) throw new CliError('--allowance must be positive', 'Rent is collected through this allowance; zero means death at the first reap.');
-  if (allowance6 >= UNBOUNDED_FLOOR) {
+  if (allowance6 >= UNBOUNDED_ALLOWANCE_FLOOR_6) {
     throw new CliError('refusing an unbounded allowance', 'Metabolism only ever needs rent. Pass a cap you can afford to lose, e.g. --allowance 10.');
   }
-  const gasBuffer6: Usdc6 = parseUsd(str(values, 'gas-buffer') ?? DEFAULT_GAS_BUFFER);
+  const gasBuffer6: Usdc6 = parseUsdFlag(str(values, 'gas-buffer') ?? DEFAULT_GAS_BUFFER, 'gas-buffer');
   const required6 = ENTRY_FEE_6 + gasBuffer6;
 
   // --- rail 1: mainnet needs to be asked for, twice --------------------------

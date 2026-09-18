@@ -14,7 +14,7 @@ import { createContext, requireAddress } from '../lib/config.js';
 import { CliError } from '../lib/errors.js';
 import { resolveKey } from '../lib/keys.js';
 import { dim, insolvent, solvent, underline } from '../ui/color.js';
-import { heading, kv, note, ok, out, type Row } from '../ui/render.js';
+import { heading, kv, note, ok, out, warn, type Row } from '../ui/render.js';
 
 export const usage = `solvent reap <id> [<id>…]  -- settle rent, and reap what cannot pay
 
@@ -121,6 +121,7 @@ export async function run(argv: string[]): Promise<number> {
   }
 
   const key = resolveKey({ spec: str(values, 'key'), env: ctx.env, envPath: ctx.envPath, allowGenerate: false });
+  if (key.origin.startsWith('--key')) warn('a key passed on the command line is in your shell history; rotate it if it holds real money');
   const wallet = walletClientFor(ctx, key.account);
 
   out();

@@ -27,6 +27,11 @@ export interface PnLRow {
 
 export interface PnLBarsProps {
   rows: readonly PnLRow[];
+  /**
+   * The sentence that says where every value can be read. Only a caller that has
+   * put a table view around this chart may pass it.
+   */
+  tableViewHint?: string;
   width?: number;
   className?: string;
 }
@@ -47,7 +52,7 @@ const LABEL_FONT = 11;
  * palette and no legend. Every value ships its + or minus glyph, so the colour is
  * reinforcement rather than the message.
  */
-export function PnLBars({ rows, width = 560, className = '' }: PnLBarsProps) {
+export function PnLBars({ rows, tableViewHint, width = 560, className = '' }: PnLBarsProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const w = useChartWidth(hostRef, width);
@@ -130,7 +135,9 @@ export function PnLBars({ rows, width = 560, className = '' }: PnLBarsProps) {
         onKeyDown={onKeyDown}
         onBlur={() => setActive(null)}
         onPointerLeave={() => setActive(null)}
-        aria-label={`Net dollars earned minus burned, ${series.length} series. Switch to the table view for every value.`}
+        aria-label={`Net dollars earned minus burned, ${series.length} series.${
+          tableViewHint === undefined ? '' : ` ${tableViewHint}`
+        }`}
         className="block"
       >
         {series.map((s, i) => {

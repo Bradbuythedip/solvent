@@ -11,6 +11,7 @@ import { createContext, envAddressKey, RPC_ENV_KEY, type ContractName } from '..
 import { briefly } from '../lib/errors.js';
 import { tryHealth } from '../lib/indexer.js';
 import { resolveKey } from '../lib/keys.js';
+import { UNBOUNDED_ALLOWANCE_FLOOR_6 } from '../lib/money.js';
 import { dim, ink } from '../ui/color.js';
 import { checkLine, heading, note, out, type CheckLine } from '../ui/render.js';
 
@@ -22,9 +23,6 @@ export const usage = `solvent doctor  -- check that this machine can reach the a
   --env <path>                 .env to read (default: ./.env)
   --key <spec>                 key to check: "env", a 0x key, or a path
   --json                       machine-readable checklist`;
-
-/** Anything above this is effectively unbounded and defeats the point of a cap. */
-const UNBOUNDED_FLOOR = 1n << 128n;
 
 interface Check extends CheckLine {
   name: string;
@@ -156,7 +154,7 @@ export async function run(argv: string[]): Promise<number> {
       try {
         const allowance6 = await usdcAllowance6(pub, wallet, metabolism);
         const hours = rate6 > 0n ? Number(allowance6 / rate6) : Number.POSITIVE_INFINITY;
-        const unbounded = allowance6 >= UNBOUNDED_FLOOR;
+        const unbounded = allowance6 >= UNBOUNDED_ALLOWANCE_FLOOR_6;
         const state = allowance6 === 0n ? 'fail' : unbounded ? 'warn' : 'pass';
         add({
           name: 'allowance',

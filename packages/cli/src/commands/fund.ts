@@ -6,7 +6,7 @@
  * subsidy, never as earnings.
  */
 
-import { formatDuration, formatUsd, parseUsd } from '@solvent/core';
+import { formatDuration, formatUsd } from '@solvent/core';
 import type { Hex, Usdc6 } from '@solvent/core';
 import { isAddress, getAddress } from 'viem';
 import { resolveAgentRef } from '../lib/agent.js';
@@ -16,6 +16,7 @@ import { createContext, requireAddress } from '../lib/config.js';
 import { get } from '../lib/env.js';
 import { CliError } from '../lib/errors.js';
 import { resolveKey } from '../lib/keys.js';
+import { parseUsdFlag } from '../lib/money.js';
 import { dim } from '../ui/color.js';
 import { fundingPanel } from '../ui/panels.js';
 import { heading, note, ok, out, Status } from '../ui/render.js';
@@ -67,7 +68,8 @@ export async function run(argv: string[]): Promise<number> {
     label = key.origin;
   }
 
-  const amount6: Usdc6 | null = str(values, 'amount') === undefined ? null : parseUsd(str(values, 'amount') ?? '0');
+  const amountArg = str(values, 'amount');
+  const amount6: Usdc6 | null = amountArg === undefined ? null : parseUsdFlag(amountArg, 'amount');
   if (amount6 !== null && amount6 <= 0n) throw new CliError('--amount must be positive');
 
   const start6 = await usdcBalance6(pub, target);

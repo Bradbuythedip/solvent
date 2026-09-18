@@ -24,6 +24,11 @@ export interface LifespanHistogramProps {
   /** Single hue: the chart is one series, so the title names it and there is no legend. */
   state?: SolvencyState;
   bins?: number;
+  /**
+   * The sentence that says where every bin can be read. Only a caller that has
+   * put a table view around this chart may pass it.
+   */
+  tableViewHint?: string;
   width?: number;
   height?: number;
   className?: string;
@@ -40,6 +45,7 @@ export function LifespanHistogram({
   values,
   state = 'solvent',
   bins,
+  tableViewHint,
   width = 560,
   height = 180,
   className = '',
@@ -132,7 +138,9 @@ export function LifespanHistogram({
         onPointerLeave={() => setActive(null)}
         aria-label={`Lifespan distribution across ${total} agents, median ${formatDuration(
           mid,
-        )}, longest ${formatDuration(domainMax)}. Switch to the table view for every bin.`}
+        )}, longest ${formatDuration(domainMax)}.${
+          tableViewHint === undefined ? '' : ` ${tableViewHint}`
+        }`}
         className="block"
       >
         <g aria-hidden="true">

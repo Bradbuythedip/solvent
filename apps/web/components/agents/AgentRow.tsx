@@ -16,7 +16,7 @@ import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import type { AgentSummary, IndexerMode, LedgerEntry, SolvencyState } from '@solvent/core';
 import { Amount, Money } from '@/components/ui/Money';
 import { ModelBadge, STATE_MARK, StateChip } from '@/components/ui/primitives';
-import { Sparkline } from '@/components/charts/Sparkline';
+import { Sparkline, sparklineTable } from '@/components/charts/Sparkline';
 import { ChartFrame } from '@/components/charts/ChartFrame';
 import { BurnComposition, burnTable } from '@/components/charts/BurnComposition';
 import { toBig } from '@/components/charts/geometry';
@@ -127,6 +127,11 @@ export function AgentRow({
             state={state}
             width={COLUMNS.spark.width}
             height={56}
+            // This cell's table view is in the row's drawer, one disclosure
+            // away, so the name may only point there when the row opens.
+            tableViewHint={
+              expandable ? 'Open the row detail for a table of every value.' : undefined
+            }
             projectionSeconds={
               agent.runwaySeconds !== null && agent.runwaySeconds > 0 ? agent.runwaySeconds : undefined
             }
@@ -165,7 +170,7 @@ export function AgentRow({
               onClick={onToggle}
               aria-expanded={expanded}
               aria-controls={panelId}
-              aria-label={`${expanded ? 'Hide' : 'Show'} burn detail for ${agent.handle}`}
+              aria-label={`${expanded ? 'Hide' : 'Show'} detail for ${agent.handle}`}
               className="inline-flex h-7 w-7 items-center justify-center rounded border border-transparent text-ink-muted transition-colors duration-150 hover:border-border hover:text-ink"
             >
               <svg
@@ -228,12 +233,39 @@ function AgentDrawer({
 }) {
   const parts = burnParts(agent);
   const table = burnTable(parts);
+  // The same points the row's spark cell draws, so this really is that chart's
+  // table rather than a neighbouring series that happens to look like it.
+  const points = agent.sparkline.slice(-64);
+  const balance = sparklineTable(points, 'balance6');
   const walletUrl = explorerAddressUrl(chainId, agent.wallet, mode);
 
   return (
     // The rail ties the drawer to the row it belongs to, in that row's own state.
     <div className="px-4 py-4" style={{ borderLeft: `2px solid ${STATE_MARK[state]}` }}>
       <div className="grid gap-4 lg:grid-cols-2">
+        <ChartFrame
+          title="Balance history"
+          description="The row's curve at a size that can be read, and every value behind it."
+          tableHead={balance.head}
+          tableRows={balance.rows}
+          className="lg:col-span-2"
+        >
+          <Sparkline
+            points={points}
+            field="balance6"
+            state={state}
+            height={140}
+            width={880}
+            showAxis
+            tableViewHint="Switch to the table view for every value."
+            projectionSeconds={
+              agent.runwaySeconds !== null && agent.runwaySeconds > 0
+                ? agent.runwaySeconds
+                : undefined
+            }
+          />
+        </ChartFrame>
+
         <ChartFrame
           title="Burn composition"
           description="Rent is the floor it pays for existing; gas is dollars on Arc, so it burns like anything else."

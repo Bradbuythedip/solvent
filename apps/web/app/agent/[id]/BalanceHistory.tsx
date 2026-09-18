@@ -57,6 +57,7 @@ export function BalanceHistory({
         height={268}
         width={880}
         showAxis
+        tableViewHint="Switch to the table view for every value."
         projectionSeconds={projecting ? runwaySeconds : undefined}
       />
 

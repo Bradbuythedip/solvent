@@ -62,6 +62,11 @@ const GLOBAL_LEDGER_KEEP = 2_000;
 /** Metabolism caps the reported runway; a number this large reads as "fine". */
 const RUNWAY_CAP_SECONDS = 90 * DAY;
 
+/** An approval with less than this left is about to lapse, so the operator decides. */
+const APPROVAL_LOW_SECONDS = 12 * HOUR;
+/** How often an operator looks at the approval it granted. */
+const APPROVAL_REVIEWS_PER_HOUR = 1.5;
+
 const DEFAULT_AGENTS = 60;
 export const DEFAULT_SEED = 1337;
 
@@ -256,6 +261,12 @@ interface Profile {
   bounty6: bigint;
   /** Share of scripted income booked as a bounty rather than a service sale. */
   bountyBias: number;
+  /**
+   * Revenue per dollar of cost, in basis points. This is the agent's whole thesis:
+   * above 10_000 it sells its work for more than the work cost, below it does not.
+   * Drawn centred under break-even, because most of them should not make it.
+   */
+  marginBps: bigint;
 }
 
 interface SimAgent {
@@ -282,6 +293,12 @@ interface SimAgent {
 
   /** Remaining approval to Metabolism. When this cannot cover rent, the agent dies. */
   allowance6: bigint;
+  /**
+   * Cost the agent has paid out — gas and bought inputs — and not yet sold against.
+   * Live income is drawn from this at the profile's margin, never minted, so an agent
+   * that does not spend to earn cannot earn and the arena is not a money printer.
+   */
+  workCredit6: bigint;
   /**
    * The wallet floor a live agent will not spend through — "idle to conserve" from
    * the agent loop. It is what is still sitting there when rent finally cannot be
@@ -536,6 +553,9 @@ function makeProfile(rng: Rng): Profile {
     ticketSell6: rng.usd(0.01, 1.2),
     bounty6: rng.usd(1.5, 120),
     bountyBias: 0.08,
+    // Centred just under break-even, so the modal agent scrapes along and rent
+    // decides it. A third or so can actually cover their costs; the rest are the feed.
+    marginBps: BigInt(Math.round(rng.logRange(0.45, 1.9) * 10_000)),
   };
   switch (kind) {
     case 'servicer':
@@ -692,6 +712,7 @@ function buildAgentHistory(s: State, id: number, drafts: Draft[]): SimAgent {
     bountyEarned6: 0n,
     txCount: 1, // the spawn transaction itself
     allowance6: 0n,
+    workCredit6: 0n,
     reserve6: rng.usd(0.00005, 0.05),
     settleEvery,
     lastSettledAt: bornAt,
@@ -1039,19 +1060,23 @@ function stepAgent(s: State, a: SimAgent, rng: Rng, out: AdvanceResult): void {
     const gas6 = minBig(p.gasPerTx6 * BigInt(txs), spendable());
     if (gas6 > 0n) {
       a.txCount += txs;
+      a.workCredit6 += gas6;
       push(book(s, a, null, 'BURN', 'GAS', gas6, s.contracts.treasury, `gas · ${txs} tx`, s.now));
     }
   }
 
   if (per(p.sellsPerHour)) {
-    const amount = jitter(rng, p.ticketSell6);
-    push(book(s, a, null, 'EARN', 'SERVICE', amount, rng.pick(s.customers), `served ${rng.pick(SERVICES)}`, s.now));
+    const amount = earnAgainstCost(a, jitter(rng, p.ticketSell6));
+    if (amount > 0n) {
+      push(book(s, a, null, 'EARN', 'SERVICE', amount, rng.pick(s.customers), `served ${rng.pick(SERVICES)}`, s.now));
+    }
   }
 
   if (per(p.buysPerHour)) {
     const provider = pickProvider(s, rng, a);
     const amount = minBig(jitter(rng, p.ticketBuy6), spendable());
     if (amount > 0n) {
+      a.workCredit6 += amount;
       // R4: both sides of an agent-to-agent payment, one transaction, booked atomically.
       const txHash = simTxHash(s.seed, 'x402', a.id, provider ? provider.id : 0, s.now, a.entrySeq);
       const service = rng.pick(SERVICES);
@@ -1069,11 +1094,24 @@ function stepAgent(s: State, a: SimAgent, rng: Rng, out: AdvanceResult): void {
   }
 
   if (per(p.bountiesPerHour)) {
-    push(book(s, a, null, 'EARN', 'BOUNTY', jitter(rng, p.bounty6), s.contracts.bountyBoard, 'bounty payout', s.now));
+    const amount = earnAgainstCost(a, jitter(rng, p.bounty6));
+    if (amount > 0n) {
+      push(book(s, a, null, 'EARN', 'BOUNTY', amount, s.contracts.bountyBoard, 'bounty payout', s.now));
+    }
   }
 
   if (p.topUpsPerHour > 0 && per(p.topUpsPerHour)) {
     push(book(s, a, null, 'EARN', 'CAPITAL', rng.usd(1, 40), a.operator, 'operator top-up', s.now));
+  }
+
+  // The operator watches the approval and renews it while the agent still pays for
+  // most of itself. Without a renewal every agent dies of allowance exhaustion inside
+  // thirty days however well it trades, and the feed stops being about money. Refusing
+  // to renew is the other half: a lapsed approval is death, not an escape (SPEC 3.3).
+  if (a.allowance6 < rentFor(APPROVAL_LOW_SECONDS) && per(APPROVAL_REVIEWS_PER_HOUR)) {
+    if (a.earned6 * 2n >= a.burned6) {
+      a.allowance6 += rentFor(rng.logRange(3 * DAY, 30 * DAY));
+    }
   }
 
   // A wallet this close to broke is worth the kill bounty, so reapers poll it hard.
@@ -1092,6 +1130,26 @@ function stepAgent(s: State, a: SimAgent, rng: Rng, out: AdvanceResult): void {
     pushSpark(a, s.now, true);
   }
   pruneRecentBurn(s, a);
+}
+
+/**
+ * Turn an intended gross into what the agent's unsold work can actually pay for.
+ *
+ * Live income is earned against cost already incurred — gas burnt and inputs bought —
+ * marked up by the profile's margin, and the credit consumed is gone. An agent that
+ * does not spend cannot earn, and one whose margin is under 1.0 burns down however
+ * busy it looks, which is what makes the arena an economy rather than a faucet.
+ * The history builder already has this discipline: runEpoch sizes income from what
+ * the balance has to reach, not from the profile alone.
+ */
+function earnAgainstCost(a: SimAgent, want6: bigint): bigint {
+  if (want6 <= 0n || a.workCredit6 <= 0n) return 0n;
+  const m = a.profile.marginBps;
+  // Ceil, so a sale smaller than the margin's resolution still costs something.
+  const cost6 = minBig((want6 * 10_000n + m - 1n) / m, a.workCredit6);
+  if (cost6 <= 0n) return 0n;
+  a.workCredit6 -= cost6;
+  return (cost6 * m) / 10_000n;
 }
 
 function jitter(rng: Rng, amount6: bigint): bigint {
@@ -1129,6 +1187,7 @@ function spawnAgent(s: State, rng: Rng): AgentSummary {
     bountyEarned6: 0n,
     txCount: 1, // the spawn transaction itself
     allowance6: rentFor(rng.logRange(6 * HOUR, 30 * DAY)),
+    workCredit6: 0n,
     reserve6: rng.usd(0.00005, 0.05),
     settleEvery: rng.pick([900, 1200, 1800, 2700, 3600]),
     lastSettledAt: s.now,
@@ -1205,10 +1264,26 @@ function burnRateOf(s: State, a: SimAgent): bigint {
   return RENT_PER_HOUR_6 + observed;
 }
 
-function runwayOf(a: SimAgent, burnRate6: bigint): number | null {
+/**
+ * Time until the reaper, by the same rule that kills.
+ *
+ * An agent dies when `min(due, balance, allowance) < due` (stepAgent, mirroring
+ * Metabolism.reap), so two leashes bind it: the wallet against everything it burns,
+ * and the rent approval against rent alone. The countdown has to show whichever runs
+ * out first, net of the rent already accrued since the last settle — a balance-only
+ * figure promises ninety days to agents the reaper takes in an afternoon, which makes
+ * the dying state unreachable and the meter a lie.
+ */
+function runwayOf(s: State, a: SimAgent, burnRate6: bigint): number | null {
   if (a.status !== 'ALIVE') return null;
   if (burnRate6 <= 0n) return -1; // no burn rate: infinite runway, encoded as -1
-  const seconds = Number((a.balance6 * 3600n) / burnRate6);
+  const accrued = rentFor(s.now - a.lastSettledAt);
+  const cash6 = a.balance6 - accrued;
+  const approval6 = a.allowance6 - accrued;
+  if (cash6 <= 0n || approval6 <= 0n) return 0;
+  const seconds = Number(
+    minBig((cash6 * 3600n) / burnRate6, (approval6 * 3600n) / RENT_PER_HOUR_6),
+  );
   return Math.min(RUNWAY_CAP_SECONDS, Math.max(0, seconds));
 }
 
@@ -1249,7 +1324,7 @@ function summaryOf(s: State, a: SimAgent): AgentSummary {
     serviceEarned6: a.serviceEarned6.toString(),
     bountyEarned6: a.bountyEarned6.toString(),
     burnRatePerHour6: burnRate6.toString(),
-    runwaySeconds: runwayOf(a, burnRate6),
+    runwaySeconds: runwayOf(s, a, burnRate6),
     lifespanSeconds: Math.max(0, (a.diedAt ?? s.now) - a.bornAt),
     txCount: a.txCount,
     rank: s.ranks.get(a.id) ?? null,

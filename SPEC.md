@@ -618,8 +618,18 @@ measures 12.7. The palette was selected by running
 | Stat strip | headline numbers | stat tiles, label · value · delta · sparkline |
 
 Every line/area chart ships a **crosshair + tooltip**; every bar/dot ships a per-mark
-tooltip. Every chart has a **table view** toggle. `prefers-reduced-motion` disables
-ticking, the arena animation, and all transitions.
+tooltip. Every chart a reader came to the page for ships a **table view** toggle in the
+frame around it, and a sparkline may reach its table through the disclosure that owns it
+— the leaderboard row's curve through the row's own drawer. A sparkline used as a summary
+mark beside a figure already written out as text — a stat tile, a top-movers row — may
+stand without one; its accessible name then states the series, its sample count and its
+latest value, and stops there.
+
+What no chart may do is name a table view that is not on the page, or announce a solvency
+state for a series that has none. The toggle lives in the frame and the state belongs to
+an agent, so a chart component may claim neither on its own: both are passed in by the
+call site that knows. `prefers-reduced-motion` disables ticking, the arena animation, and
+all transitions.
 
 ### 6.5 Routes
 
@@ -700,7 +710,46 @@ SOLVENT_INDEXER_URL=http://localhost:8787
 NEXT_PUBLIC_INDEXER_URL=http://localhost:8787
 PRIVATE_KEY=              # never committed
 ANTHROPIC_API_KEY=        # optional, for the Claude brain
+
+SOLVENT_ALLOWANCE_CAP_6=10000000       # $10.00 - rent allowance to Metabolism
+SOLVENT_MAX_SPEND_PER_ACTION_6=50000   # $0.05  - per-action spend cap
+SOLVENT_PRICE_6=10000                  # $0.01  - this agent's own x402 price
 ```
+
+### 9.1 Money-valued variables
+
+Every variable whose name ends in `_6` is an amount of USDC, and every reader of one
+parses it **the same way**:
+
+| Form | Meaning | Example |
+|---|---|---|
+| bare digits (`^\d+$`) | raw 6-decimal ERC-20 units | `10000000` is $10.00 |
+| anything else | a dollar string, through `parseUsd` | `$10.00`, `10.00`, `1,200.50` |
+
+Negative amounts are rejected. A value matching neither form is an operator mistake,
+not a bug: the reader MUST fail with a message naming the variable and both accepted
+forms, and MUST NOT fail with a raw stack trace.
+
+One grammar, because a `_6` variable is read by both `@solvent/cli` (which writes the
+`.env`) and `@solvent/agent` (which later loads it). Two grammars behind one name mean
+the number the operator typed and the number approved on chain are different numbers,
+and `SOLVENT_ALLOWANCE_CAP_6` sets how much USDC Metabolism may take.
+
+A command-line **flag** documented as `<usd>` is always dollars: `--allowance 10` is ten
+dollars, never ten micro-USDC. The dual form above belongs to the environment only.
+
+### 9.2 What "unbounded" means
+
+`UNBOUNDED_ALLOWANCE_FLOOR_6 = 2^128`. An allowance at or above it is unbounded: it is
+more rent than any wallet can hold, so it is an infinite approval whatever sentinel the
+approving tool happened to use. Every place that decides whether an allowance is
+unbounded uses this one number - `solvent spawn` (refuses one), `solvent doctor` (warns),
+`solvent status` (prints `unbounded`), and the runtime rail of SPEC 7 (refuses to start
+without `--yes-i-know`).
+
+They have to agree. A runtime floor set above the tools' threshold is a rail that lets
+through exactly the approvals `doctor` and `status` just told the operator were
+unbounded - `type(uint160).max`, the Permit2 shape, is one of them.
 
 ---
 

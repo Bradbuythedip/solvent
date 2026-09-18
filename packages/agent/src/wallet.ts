@@ -28,8 +28,15 @@ import {
 } from '@solvent/core';
 import type { AgentConfig, ContractAddresses } from './config.js';
 
-/** Anything at or above this is an infinite approval by any practical reading. */
-export const UNBOUNDED_ALLOWANCE_FLOOR_6: Usdc6 = 1n << 255n;
+/**
+ * Anything at or above this is an infinite approval by any practical reading.
+ *
+ * SPEC 9.2 fixes the number at 2^128 for the whole repo, and it has to be the
+ * same number the CLI uses: a floor above `solvent doctor`'s threshold is a rail
+ * that lets through exactly the approvals doctor just called unbounded, such as
+ * Permit2's type(uint160).max. @solvent/cli's copy is in src/lib/money.ts.
+ */
+export const UNBOUNDED_ALLOWANCE_FLOOR_6: Usdc6 = 1n << 128n;
 
 const SECONDS_PER_HOUR = 3600n;
 /** SPEC 3.3 caps Metabolism's own runway answer; this caps the local estimate. */

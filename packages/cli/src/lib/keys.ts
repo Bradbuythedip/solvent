@@ -22,6 +22,12 @@ export interface ResolvedKey {
 
 const HEX32 = /^[0-9a-fA-F]{64}$/;
 
+/**
+ * A 0x prefix, or a run of hex long enough to be half a key, means the value is
+ * key material rather than a path.
+ */
+const KEY_SHAPED = /^0[xX]|[0-9a-fA-F]{32}/;
+
 export function normalisePrivateKey(raw: string, origin: string): Hex {
   const trimmed = raw.trim();
   const body = trimmed.startsWith('0x') || trimmed.startsWith('0X') ? trimmed.slice(2) : trimmed;
@@ -37,6 +43,19 @@ function accountFrom(privateKey: Hex, origin: string, generated: boolean): Resol
 }
 
 function fromFile(path: string): ResolvedKey {
+  // The only place a --key value is echoed, so the only place that has to refuse
+  // key material. resolveKey dispatches on shape alone, and a key that lost one
+  // character to a bad paste is neither a valid key nor a path, so it lands
+  // here: "no key file at 0x4c0b..." would put 63 of a live wallet's 64 nibbles
+  // into stderr, the CI transcript and anything shipping those logs, and one
+  // missing nibble is not a brute force. Shape decides, not existence - the file
+  // is exactly what does not exist when this message gets printed.
+  if (KEY_SHAPED.test(path)) {
+    throw new CliError(
+      '--key looks like key material but is not a 32-byte hex key',
+      'A private key is 64 hex characters, with or without the 0x prefix; check for a truncated paste. The value is not echoed here, on purpose.',
+    );
+  }
   if (!existsSync(path)) throw new CliError(`no key file at ${path}`);
   const text = readFileSync(path, 'utf8');
   const fromEnvFile = get(parseEnv(text), 'PRIVATE_KEY');

@@ -28,6 +28,19 @@ export interface SparklineProps {
   field: SparkField;
   /** Colour comes from solvency state and from nothing else. */
   state: SolvencyState;
+  /**
+   * Names the series in the accessible name. Given, the solvency word is not
+   * announced at all: an arena-wide total has no solvency state, so `state` on
+   * one of those is a colour slot and not a claim about the number.
+   */
+  label?: string;
+  /**
+   * The sentence that says where every value can be read. A table view lives in
+   * the frame around a chart rather than in the chart, so only the caller knows
+   * whether there is one — and a name that sends a reader to a table that is not
+   * there is worse than one that never mentions it.
+   */
+  tableViewHint?: string;
   height?: number;
   width?: number;
   /**
@@ -53,6 +66,8 @@ export function Sparkline({
   points,
   field,
   state,
+  label,
+  tableViewHint,
   height = 120,
   width = 560,
   projectionSeconds,
@@ -214,6 +229,19 @@ export function Sparkline({
 
   const projectionNote = runway === null ? null : `zero in ${formatDuration(runway)}`;
 
+  // Every clause here has to be true at this call site: the solvency word only
+  // where the series has a solvency state, the table sentence only where a
+  // caller has actually put a table view around the chart.
+  const lead =
+    label === undefined
+      ? `${STATE_WORD[state]}. ${data.length} ${valueName} observations`
+      : `${label}. ${data.length} samples`;
+  const accessibleName = `${lead}, latest ${formatUsd(last.raw, {
+    sign: field === 'net6',
+  })}${projectionNote === null ? '' : `, ${projectionNote}`}.${
+    tableViewHint === undefined ? '' : ` ${tableViewHint}`
+  }`;
+
   return (
     <div ref={hostRef} className={`relative w-full ${className}`}>
       <svg
@@ -226,10 +254,7 @@ export function Sparkline({
         tabIndex={focusable ? 0 : undefined}
         onKeyDown={onKeyDown}
         onBlur={() => setCursor(null)}
-        aria-label={`${STATE_WORD[state]}. ${data.length} ${valueName} observations, latest ${formatUsd(
-          last.raw,
-          { sign: field === 'net6' },
-        )}${projectionNote === null ? '' : `, ${projectionNote}`}. Switch to the table view for every value.`}
+        aria-label={accessibleName}
         className="block"
       >
         <defs>

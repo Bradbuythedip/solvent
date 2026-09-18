@@ -82,7 +82,16 @@ export function StatStrip({
         value={<span className="tnum">{formatUsd(BigInt(s.totalBurned6))}</span>}
         hint={`${formatUsd(BigInt(s.totalRentBurned6))} rent · ${formatUsd(BigInt(s.totalGasBurned6))} gas`}
         spark={
-          <Sparkline points={burnedSpark} field="balance6" width={140} height={56} state="burning" />
+          // An arena-wide total has no solvency state and no table beside it, so
+          // the curve names itself and promises nothing further.
+          <Sparkline
+            points={burnedSpark}
+            field="balance6"
+            width={140}
+            height={56}
+            state="burning"
+            label="Total burned across the arena"
+          />
         }
       />
 
@@ -91,7 +100,14 @@ export function StatStrip({
         value={<span className="tnum">{formatUsd(BigInt(s.totalEarned6))}</span>}
         hint="Capital in is never revenue"
         spark={
-          <Sparkline points={earnedSpark} field="balance6" width={140} height={56} state="solvent" />
+          <Sparkline
+            points={earnedSpark}
+            field="balance6"
+            width={140}
+            height={56}
+            state="solvent"
+            label="Total earned across the arena"
+          />
         }
       />
 

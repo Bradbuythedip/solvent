@@ -132,6 +132,32 @@ describe('parseUsd', () => {
       assert.throws(() => parseUsd(bad), /parseUsd/, `expected "${bad}" to throw`);
     }
   });
+
+  // A decimal comma is a different number, not a separator to delete. Reading "12,34"
+  // as $1,234 would loosen a rent allowance or SOLVENT_MAX_SPEND_PER_ACTION_6 by 100x.
+  it('rejects a comma that is not a thousands separator', () => {
+    for (const bad of ['12,34', '1,5', '0,05', '1.234,56', '1,2345', '1,23,4', '1,,,5', ',5', '1,']) {
+      assert.throws(() => parseUsd(bad), /parseUsd/, `expected "${bad}" to throw`);
+    }
+  });
+
+  it('still accepts correctly grouped thousands', () => {
+    assert.equal(parseUsd('1,234'), 1_234_000_000n);
+    assert.equal(parseUsd('12,345,678.90'), 12_345_678_900_000n);
+  });
+
+  it('rejects internal whitespace while still trimming the ends', () => {
+    assert.equal(parseUsd('  12.34  '), 12_340_000n);
+    for (const bad of ['1 2', '$ 9.00', '1\t2']) {
+      assert.throws(() => parseUsd(bad), /parseUsd/, `expected "${bad}" to throw`);
+    }
+  });
+
+  it('rejects a bare sign or currency symbol instead of reading it as zero', () => {
+    for (const bad of ['-', '$-', '-.', '-$']) {
+      assert.throws(() => parseUsd(bad), /parseUsd/, `expected "${bad}" to throw`);
+    }
+  });
 });
 
 describe('formatUsd adaptive precision', () => {

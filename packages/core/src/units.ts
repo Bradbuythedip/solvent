@@ -37,16 +37,27 @@ export function nativeToUsdc6Ceil(v: Native18): Usdc6 {
   return (v + NATIVE_PER_USDC6 - 1n) / NATIVE_PER_USDC6;
 }
 
+/**
+ * Shape of a dollar string, validated before anything is stripped. The whole part is
+ * either ungrouped digits or correctly grouped thousands — a comma anywhere else is
+ * rejected rather than deleted, because "12,34" is $12.34 in half the world and
+ * silently reading it as $1,234 loosens a rent allowance or a spend cap by 100x.
+ */
+const USD_SHAPE = /^(?:-\$?|\$-?)?(\d{1,3}(?:,\d{3})+|\d*)(?:\.(\d*))?$/;
+
 /** Parse a human dollar string ("10", "0.0061", "$1,200.50") into Usdc6. */
 export function parseUsd(input: string): Usdc6 {
-  const cleaned = input.trim().replace(/[$,\s]/g, '');
-  if (!/^-?\d*(\.\d*)?$/.test(cleaned) || cleaned === '' || cleaned === '.') {
+  const trimmed = input.trim();
+  const match = USD_SHAPE.exec(trimmed);
+  const whole = match?.[1] ?? '';
+  const frac = match?.[2] ?? '';
+  // A sign or a currency symbol on its own is not a number, so require a digit.
+  if (!match || whole + frac === '') {
     throw new Error(`parseUsd: not a number: ${input}`);
   }
-  const negative = cleaned.startsWith('-');
-  const [whole = '0', frac = ''] = cleaned.replace('-', '').split('.');
+  const negative = trimmed.includes('-');
   const padded = (frac + '000000').slice(0, USDC_DECIMALS);
-  const value = BigInt(whole || '0') * ONE_USD + BigInt(padded || '0');
+  const value = BigInt(whole.replace(/,/g, '') || '0') * ONE_USD + BigInt(padded);
   return negative ? -value : value;
 }
 

@@ -14,7 +14,7 @@ import { CliError } from '../lib/errors.js';
 import { resolveKey } from '../lib/keys.js';
 import { dim, underline } from '../ui/color.js';
 import { typedConfirm } from '../lib/prompt.js';
-import { heading, kv, note, ok, out } from '../ui/render.js';
+import { heading, kv, note, ok, out, warn } from '../ui/render.js';
 
 export const usage = `solvent retire [<id|handle>]  -- leave the arena while still solvent
 
@@ -55,6 +55,7 @@ export async function run(argv: string[]): Promise<number> {
   if (!ctx.yes) await typedConfirm(`Retire #${ref.id} ${record.handle} on ${ctx.network.name}?`, record.handle);
 
   const key = resolveKey({ spec: str(values, 'key'), env: ctx.env, envPath: ctx.envPath, allowGenerate: false });
+  if (key.origin.startsWith('--key')) warn('a key passed on the command line is in your shell history; rotate it if it holds real money');
   if (key.account.address.toLowerCase() !== record.operator.toLowerCase()) {
     throw new CliError(
       `${key.account.address} is not the operator of #${ref.id}`,

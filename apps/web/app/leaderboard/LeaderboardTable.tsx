@@ -151,7 +151,7 @@ export function LeaderboardTable({
                     />
                   ))}
                   <th scope="col" style={{ top: HEADER_OFFSET, width: 36 }}>
-                    <span className="sr-only">Burn detail</span>
+                    <span className="sr-only">Detail</span>
                   </th>
                 </tr>
               </thead>

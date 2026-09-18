@@ -24,6 +24,7 @@ import { owed6, publicClientFor, readAgent, rentPerHour6, runwaySeconds, usdcAll
 import { agentPageUrl, createContext, requireAddress } from '../lib/config.js';
 import { CliError } from '../lib/errors.js';
 import { tryAgentDetail } from '../lib/indexer.js';
+import { UNBOUNDED_ALLOWANCE_FLOOR_6 } from '../lib/money.js';
 import { dim, ink, underline } from '../ui/color.js';
 import { chip, heading, kv, note, out, signed, type Row } from '../ui/render.js';
 
@@ -35,8 +36,6 @@ export const usage = `solvent status [<id|handle>]  -- balance, rent, runway, P&
   --indexer <url>              override the indexer base URL
   --env <path>                 .env to read (default: ./.env)
   --json                       machine-readable output, bigints as decimal strings`;
-
-const UNBOUNDED_FLOOR = 1n << 128n;
 
 export async function run(argv: string[]): Promise<number> {
   const { values, positionals } = parse(argv, {}, 'status');
@@ -146,7 +145,7 @@ export async function run(argv: string[]): Promise<number> {
       { label: 'runway', value: formatRunway(runway) },
       {
         label: 'allowance',
-        value: allowance6 >= UNBOUNDED_FLOOR ? 'unbounded' : formatUsd(allowance6),
+        value: allowance6 >= UNBOUNDED_ALLOWANCE_FLOOR_6 ? 'unbounded' : formatUsd(allowance6),
         note: allowance6 === 0n ? 'zero allowance is death at the next reap' : undefined,
       },
     );
