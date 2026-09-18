@@ -30,7 +30,14 @@ function main(): void {
     store,
     config,
     status(): DriverStatus {
-      return driver?.status() ?? { ok: false, head: store.head, lag: 0 };
+      return (
+        driver?.status() ?? {
+          ok: false,
+          head: store.head,
+          lag: 0,
+          gasGapBlocks: store.gasGapCount(),
+        }
+      );
     },
   };
 

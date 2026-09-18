@@ -260,13 +260,24 @@ export function arenaStats(rt: Runtime): ArenaStats {
   };
 }
 
-export function healthFor(rt: Runtime): HealthResponse {
+/**
+ * SPEC 5 health plus one indexer-local field. R7 says every displayed number
+ * resolves to a transaction hash, so a ledger we know is incomplete has to say
+ * so out loud: `gasGapBlocks` counts the blocks whose gas is still unread, and
+ * `ok` is false for as long as any remain.
+ */
+export interface IndexerHealth extends HealthResponse {
+  gasGapBlocks: number;
+}
+
+export function healthFor(rt: Runtime): IndexerHealth {
   const status = rt.status();
   return {
     ok: status.ok,
     chainId: rt.config.chainId,
     head: status.head,
     lag: status.lag,
+    gasGapBlocks: status.gasGapBlocks,
     // SPEC 5.2: this is the field the UI hangs its DEMO marker on. It reports the
     // mode that is actually running, never the one that was asked for.
     mode: rt.config.mode,
@@ -343,10 +354,9 @@ function startIndex(
   cursor: AgentCursor | null,
 ): number {
   if (!cursor) return 0;
-  const exact = items.findIndex((item) => item.id === cursor.id);
-  if (exact >= 0) return exact + 1;
-  // The anchor row moved or left the filter: resume at the first row that sorts
-  // strictly after it.
+  // No "find the anchor and resume after it" shortcut: between two requests the
+  // anchor's own key can move, and its CURRENT index then skips or repeats every
+  // row in between. Only the key answers "what sorts strictly after this?".
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item) continue;

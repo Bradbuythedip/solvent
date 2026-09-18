@@ -69,6 +69,7 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
     event Retired(uint256 indexed agentId, uint64 at, uint256 finalBalance6);
     event Funded(uint256 indexed agentId, address indexed from, uint256 amount6);
     event EndpointSet(uint256 indexed agentId, string endpoint);
+    event SpawnAuthorized(address indexed wallet, address indexed operator);
     event MetabolismSet(address indexed metabolism);
     event BountyBoardSet(address indexed bountyBoard);
     event LedgerSet(address indexed ledger);
@@ -86,6 +87,9 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
     error NotMetabolism(address caller);
     error MetabolismUnset();
     error BountyBoardUnset();
+    error WalletNotAuthorized(address wallet, address caller);
+    error OwesRent(uint256 agentId);
+    error ArenaLive(uint256 totalAgents);
 
     Ledger public ledger;
     IUSDC public usdc;
@@ -95,6 +99,8 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
     mapping(uint256 => Agent) public agents;
     mapping(address => uint256) private _agentOf;
     mapping(bytes32 => uint256) public agentByHandle;
+    /// wallet => the one operator that wallet has allowed to bind it (see spawn).
+    mapping(address => address) public spawnAuthorization;
 
     uint256 public totalAgents;
 
@@ -111,6 +117,17 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
 
     // --- lifecycle ----------------------------------------------------------
 
+    /**
+     * The wallet names the operator allowed to spawn it. Proof of control, not
+     * paperwork: the binding is permanent and the death that follows it is public,
+     * so a wallet nobody controls must never be dragged into the arena by a
+     * stranger. An operator that is its own wallet needs no authorization.
+     */
+    function authorizeSpawn(address operator) external {
+        spawnAuthorization[msg.sender] = operator;
+        emit SpawnAuthorized(msg.sender, operator);
+    }
+
     function spawn(
         address wallet,
         bytes32 modelTag,
@@ -124,6 +141,9 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
 
         uint256 existing = _agentOf[wallet];
         if (existing != 0) revert WalletTaken(wallet, existing);
+        if (msg.sender != wallet && spawnAuthorization[wallet] != msg.sender) {
+            revert WalletNotAuthorized(wallet, msg.sender);
+        }
 
         bytes32 handleKey = keccak256(bytes(handle));
         if (!_validHandle(handle)) revert InvalidHandle(handle);
@@ -145,6 +165,7 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
         });
         _agentOf[wallet] = agentId;
         agentByHandle[handleKey] = agentId;
+        delete spawnAuthorization[wallet]; // one authorization, one spawn
 
         IERC20(address(usdc)).safeTransferFrom(msg.sender, address(this), ENTRY_FEE_6);
         IERC20(address(usdc)).safeTransfer(wallet, ENTRY_SEED_6);
@@ -190,9 +211,16 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
         emit EndpointSet(agentId, endpoint);
     }
 
-    function retire(uint256 agentId) external {
+    /**
+     * The front door out. Rent is settled first: an agent that cannot pay what it
+     * already owes is insolvent, not retired, and the feed is the product. Retiring
+     * must never be the cheap way to dodge a death that has already been earned.
+     */
+    function retire(uint256 agentId) external nonReentrant {
         Agent storage a = _alive(agentId);
         if (msg.sender != a.operator) revert NotOperator(agentId, msg.sender);
+
+        if (IMetabolism(metabolism).settle(agentId)) revert OwesRent(agentId);
 
         uint64 nowSeconds = uint64(block.timestamp);
         a.status = Status.RETIRED;
@@ -259,19 +287,31 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
 
     // --- admin --------------------------------------------------------------
 
-    function setMetabolism(address metabolism_) external onlyOwner {
+    /**
+     * Wiring is mutable only while the arena is empty. `metabolism` is the address
+     * `onlyMetabolism` trusts, so an owner able to repoint it at itself could stamp
+     * any live agent INSOLVENT for ever — a power neither this spec nor the README
+     * admits, and one that death's permanence makes unrecoverable. Once the first
+     * agent exists the wiring is frozen; a redeploy stays possible before that.
+     */
+    modifier beforeFirstAgent() {
+        if (totalAgents != 0) revert ArenaLive(totalAgents);
+        _;
+    }
+
+    function setMetabolism(address metabolism_) external onlyOwner beforeFirstAgent {
         if (metabolism_ == address(0)) revert ZeroAddress();
         metabolism = metabolism_;
         emit MetabolismSet(metabolism_);
     }
 
-    function setBountyBoard(address bountyBoard_) external onlyOwner {
+    function setBountyBoard(address bountyBoard_) external onlyOwner beforeFirstAgent {
         if (bountyBoard_ == address(0)) revert ZeroAddress();
         bountyBoard = bountyBoard_;
         emit BountyBoardSet(bountyBoard_);
     }
 
-    function setLedger(address ledger_) external onlyOwner {
+    function setLedger(address ledger_) external onlyOwner beforeFirstAgent {
         if (ledger_ == address(0)) revert ZeroAddress();
         ledger = Ledger(ledger_);
         emit LedgerSet(ledger_);
@@ -279,7 +319,7 @@ contract SolventRegistry is Ownable, ReentrancyGuard {
 
     /// Arc's USDC is a precompile at a fixed address; this exists so the suite can
     /// run against a local mock, and so a redeploy is never blocked by an immutable.
-    function setUsdc(address usdc_) external onlyOwner {
+    function setUsdc(address usdc_) external onlyOwner beforeFirstAgent {
         if (usdc_ == address(0)) revert ZeroAddress();
         usdc = IUSDC(usdc_);
         emit UsdcSet(usdc_);

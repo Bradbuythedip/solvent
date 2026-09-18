@@ -162,7 +162,8 @@ export function startDemo(store: Store, config: IndexerConfig): DemoDriver {
   return {
     arena,
     status(): DriverStatus {
-      return { ok: true, head: store.head, lag: 0 };
+      // The simulator books its own gas, so there is never a block it failed to read.
+      return { ok: true, head: store.head, lag: 0, gasGapBlocks: 0 };
     },
     stop(): void {
       stopped = true;

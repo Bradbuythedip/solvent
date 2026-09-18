@@ -176,6 +176,155 @@ contract BountyBoardTest is Arena {
         assertEq(ledger.earned6(agentId), poolBefore, "the pool paid an agent");
     }
 
+    // --- submissions are concurrent, and cannot be stolen or hoarded --------
+
+    address internal constant MALLORY_OPERATOR = address(0x0B4D);
+    address internal constant MALLORY_WALLET = address(0xB4D);
+
+    function _spawnMallory() internal returns (uint256) {
+        return _spawn(MALLORY_OPERATOR, MALLORY_WALLET, "mallory");
+    }
+
+    function test_aCopiedSubmissionCannotStealTheReward() public {
+        uint256 mallory = _spawnMallory();
+
+        // Mallory reads alice's pending calldata and lands the identical
+        // deliverable first. That used to revert alice out of her own bounty.
+        vm.prank(MALLORY_WALLET);
+        board.submit(bountyId, mallory, bytes32("deliverable"), "ipfs://deliverable");
+        _submit();
+
+        assertEq(board.submissionCount(bountyId), 2, "both claims stand");
+
+        // Silence no longer pays the thief: nothing on chain says who did the work.
+        _skip(REVIEW_WINDOW);
+        vm.prank(REAPER);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.ContestedBounty.selector, bountyId, 2));
+        board.autoRelease(bountyId);
+
+        // Nor can the poster pay the front-runner by reflex: settling a contested
+        // bounty has to name an agent.
+        vm.prank(POSTER);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.ContestedBounty.selector, bountyId, 2));
+        board.accept(bountyId);
+
+        // The poster, who can read both deliverables, settles on the real one.
+        vm.prank(POSTER);
+        board.acceptFrom(bountyId, agentId);
+
+        assertEq(ledger.earned6(agentId), REWARD_6, "alice was paid");
+        assertEq(ledger.earned6(mallory), 0, "the copier earned nothing");
+        assertEq(board.getBounty(bountyId).claimantAgentId, agentId, "the record names who was paid");
+    }
+
+    function test_oneAgentCannotLockABountyAgainstTheRest() public {
+        uint256 mallory = _spawnMallory();
+
+        vm.prank(MALLORY_WALLET);
+        board.submit(bountyId, mallory, bytes32("garbage"), "ipfs://garbage");
+
+        // The lock is gone: an honest agent can still deliver.
+        _submit();
+        assertEq(board.submissionCount(bountyId), 2, "both in");
+
+        vm.prank(POSTER);
+        board.acceptFrom(bountyId, agentId);
+        assertEq(ledger.earned6(agentId), REWARD_6, "and still be paid");
+    }
+
+    function test_anAgentSubmitsOncePerBounty() public {
+        _submit();
+        vm.prank(WALLET);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.AlreadySubmitted.selector, bountyId, agentId));
+        board.submit(bountyId, agentId, bytes32("again"), "ipfs://again");
+    }
+
+    // --- nothing settles to a corpse ----------------------------------------
+
+    function test_aDeadClaimantIsNotPaidAndDoesNotStrandTheEscrow() public {
+        _submit();
+        uint256 earnedAtDeath = ledger.earned6(agentId);
+
+        _drain(WALLET);
+        _skip(3600);
+        vm.prank(REAPER);
+        metabolism.reap(agentId);
+
+        _skip(REVIEW_WINDOW);
+        vm.prank(REAPER);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.AgentNotAlive.selector, agentId));
+        board.autoRelease(bountyId);
+
+        vm.prank(POSTER);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.AgentNotAlive.selector, agentId));
+        board.accept(bountyId);
+
+        assertEq(ledger.earned6(agentId), earnedAtDeath, "a certified lifetime P&L does not move");
+
+        // And the escrow is not stuck behind the corpse: anyone may clear the claim.
+        vm.prank(REAPER);
+        board.dropClaimant(bountyId, agentId);
+
+        BountyBoard.Bounty memory b = board.getBounty(bountyId);
+        assertTrue(b.state == BountyBoard.BountyState.OPEN, "back on the board");
+        assertEq(board.submissionCount(bountyId), 0, "no claims left");
+
+        uint256 posterBefore = usdc.balanceOf(POSTER);
+        _skip(8 days);
+        vm.prank(POSTER);
+        board.reclaim(bountyId);
+        assertEq(usdc.balanceOf(POSTER) - posterBefore, REWARD_6, "the poster got its dollars back");
+    }
+
+    function test_aVestedClaimCannotBeContestedLate() public {
+        _submit();
+        uint256 mallory = _spawnMallory();
+
+        // The window has run out: alice's claim is settled, not up for debate.
+        _skip(REVIEW_WINDOW);
+        vm.prank(MALLORY_WALLET);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.ReviewWindowClosed.selector, bountyId));
+        board.submit(bountyId, mallory, bytes32("deliverable"), "ipfs://deliverable");
+
+        board.autoRelease(bountyId);
+        assertEq(ledger.earned6(agentId), REWARD_6, "silence still pays the one who delivered");
+    }
+
+    function test_aLiveClaimantCannotBeDropped() public {
+        _submit();
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.ClaimantStillAlive.selector, bountyId, agentId));
+        board.dropClaimant(bountyId, agentId);
+    }
+
+    // --- the review window is bounded ---------------------------------------
+
+    function test_anUnboundedReviewWindowIsRefused() public {
+        vm.prank(POSTER);
+        vm.expectRevert(
+            abi.encodeWithSelector(BountyBoard.ReviewWindowTooLong.selector, type(uint64).max)
+        );
+        board.post(REWARD_6, uint64(block.timestamp + 1 days), type(uint64).max, bytes32("spec"), "ipfs://spec");
+
+        vm.prank(POSTER);
+        vm.expectRevert(abi.encodeWithSelector(BountyBoard.ReviewWindowTooLong.selector, uint64(31 days)));
+        board.post(REWARD_6, uint64(block.timestamp + 1 days), 31 days, bytes32("spec"), "ipfs://spec");
+    }
+
+    function test_theLongestAllowedWindowStillAutoReleases() public {
+        // Read it first: an external call in the argument list would eat the prank.
+        uint64 maxWindow = board.MAX_REVIEW_WINDOW();
+
+        vm.prank(POSTER);
+        uint256 id = board.post(REWARD_6, uint64(block.timestamp + 1 days), maxWindow, bytes32("spec"), "ipfs://long");
+
+        vm.prank(WALLET);
+        board.submit(id, agentId, bytes32("done"), "ipfs://done");
+
+        _skip(maxWindow);
+        board.autoRelease(id);
+        assertEq(ledger.earned6(agentId), REWARD_6, "the anti-grief clause still fires");
+    }
+
     function test_anAgentPostingABountyBurnsForIt() public {
         // Both legs of an agent-to-agent dollar, even through the board.
         uint256 poster = _spawn(address(0x0B2), address(0xB0B), "bob");

@@ -29,6 +29,14 @@ import type { AgentAction, AgentBrain, AgentContext } from './brains/types.js';
 /** Longest string the loop will put onchain as a deliverable URI. */
 const MAX_DELIVERABLE_URI = 512;
 const MAX_RECENT = 8;
+/**
+ * How many ticks in a row may fail before the run gives up. A tick that throws
+ * is nearly always the RPC, and stopping on one is worse than retrying: the
+ * process stops, rent keeps accruing per second against a wallet nobody is
+ * driving, and the next reap declares the agent insolvent for good (SPEC R6).
+ * A genuinely dead endpoint still surfaces, it just takes this many tries.
+ */
+const MAX_CONSECUTIVE_TICK_FAILURES = 10;
 
 export class LoopError extends Error {}
 
@@ -332,17 +340,39 @@ export async function runLoop(deps: LoopDeps, options: RunOptions = {}): Promise
     maxSpendPerAction: formatUsd(deps.config.maxSpendPerAction6),
   });
 
+  let consecutiveFailures = 0;
+
   for (;;) {
     if (options.signal?.aborted === true) break;
 
-    const result = await tick(deps, state);
-    if (result.stop) {
-      deps.logger.warn('loop stopping', { reason: result.reason ?? result.outcome?.note ?? 'done' });
-      break;
+    let result: TickResult | null;
+    try {
+      result = await tick(deps, state);
+      consecutiveFailures = 0;
+    } catch (error) {
+      // A cron-shaped run owns its own retry: let it report and be scheduled again.
+      if (options.once === true) throw error;
+      consecutiveFailures += 1;
+      deps.logger.error('tick failed', { error, consecutive: consecutiveFailures });
+      if (consecutiveFailures >= MAX_CONSECUTIVE_TICK_FAILURES) {
+        throw new LoopError(
+          `${consecutiveFailures} ticks in a row failed, giving up: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      result = null;
     }
-    if (options.once === true) break;
 
-    const seconds = result.outcome?.sleepSeconds ?? deps.config.intervalSeconds;
+    if (result !== null) {
+      if (result.stop) {
+        deps.logger.warn('loop stopping', { reason: result.reason ?? result.outcome?.note ?? 'done' });
+        break;
+      }
+      if (options.once === true) break;
+    }
+
+    const seconds = result?.outcome?.sleepSeconds ?? deps.config.intervalSeconds;
     deps.logger.debug('sleeping', { for: formatDuration(seconds) });
     try {
       await delay(seconds * 1000, undefined, { signal: options.signal });

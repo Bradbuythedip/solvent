@@ -42,12 +42,42 @@ const MAX_BACKOFF_MS = 30_000;
 /** With no deployment block and no override, start here rather than at genesis. */
 const HEAD_LOOKBACK_BLOCKS = 5_000n;
 
-type RawLog = Log<bigint, number, false>;
+export type RawLog = Log<bigint, number, false>;
+
+/**
+ * Ordering rank inside one transaction.
+ *
+ * SolventRegistry.spawn records the agent's CAPITAL seed and its SPAWN burn
+ * BEFORE it emits Spawned, so those Entry logs carry a lower logIndex than the
+ * agent they belong to. Replaying in pure log order books them against an agent
+ * the store has never heard of and drops them for good, leaving capitalIn6 — and
+ * therefore subsidy6 (SPEC 2) — permanently $9 short. Identity goes first.
+ */
+const PHASE_SPAWN = 0;
+const PHASE_DEFAULT = 1;
 
 interface Action {
   block: bigint;
+  tx: number;
+  phase: number;
   index: number;
   run: () => void;
+}
+
+/** Chain order, with the spawn-before-its-entries rule layered inside a transaction. */
+function compareActions(a: Action, b: Action): number {
+  if (a.block !== b.block) return a.block < b.block ? -1 : 1;
+  if (a.tx !== b.tx) return a.tx - b.tx;
+  if (a.phase !== b.phase) return a.phase - b.phase;
+  return a.index - b.index;
+}
+
+/**
+ * A reap is settled per agent, and reapMany settles many in one transaction, so
+ * the hash alone would hand every death in a batch the last agent's cause.
+ */
+function reapKey(txHash: string, agentId: bigint): string {
+  return `${txHash}:${agentId}`;
 }
 
 interface ReapInfo {
@@ -139,10 +169,15 @@ export class ChainIndexer implements Driver {
   }
 
   status(): DriverStatus {
+    const gasGapBlocks = this.store.gasGapCount();
     return {
-      ok: this.lastPollOk,
+      // R7: every displayed number resolves to a transaction hash. A block whose
+      // gas we could not read is burn we KNOW is missing from every P&L figure
+      // below it, so ok stays false until the block has been replayed.
+      ok: this.lastPollOk && gasGapBlocks === 0,
       head: this.store.head,
       lag: Math.max(0, this.store.head - this.store.lastIndexedBlock),
+      gasGapBlocks,
     };
   }
 
@@ -160,6 +195,8 @@ export class ChainIndexer implements Driver {
             `[chain] no start block configured, beginning at ${this.cursorBlock} (head ${head})`,
           );
         }
+
+        if (this.config.gasScan) await this.retryGasGaps();
 
         while (this.running && this.cursorBlock <= head) {
           const to = minBig(this.cursorBlock + this.config.chunkBlocks - 1n, head);
@@ -187,18 +224,27 @@ export class ChainIndexer implements Driver {
       toBlock: to,
     });
 
-    if (logs.length > 0) {
-      const actions: Action[] = [];
-      const reaps = this.collectReaps(logs);
-      this.collectRegistry(logs, reaps, actions);
-      this.collectLedger(logs, this.collectSelfDealt(logs), actions);
-      this.collectBounties(logs, actions);
-      actions.sort((a, b) => (a.block === b.block ? a.index - b.index : a.block < b.block ? -1 : 1));
-      for (const action of actions) action.run();
-    }
+    this.applyLogs(logs);
 
     if (this.config.gasScan) await this.scanGas(from, to);
+    // Only here, and only once the gas scan for this range has run: this is the
+    // block a restart resumes from.
     this.store.setIndexed(Number(to));
+  }
+
+  /**
+   * Apply one range's logs to the store in chain order. Public so the ordering
+   * rules can be exercised without an RPC.
+   */
+  applyLogs(logs: RawLog[]): void {
+    if (logs.length === 0) return;
+    const actions: Action[] = [];
+    const reaps = this.collectReaps(logs);
+    this.collectRegistry(logs, reaps, actions);
+    this.collectLedger(logs, this.collectSelfDealt(logs), actions);
+    this.collectBounties(logs, actions);
+    actions.sort(compareActions);
+    for (const action of actions) action.run();
   }
 
   /* --------------------------------------------------------------- decode */
@@ -208,7 +254,7 @@ export class ChainIndexer implements Driver {
     const parsed = parseEventLogs({ abi: metabolismAbi, logs, eventName: 'Reaped' });
     for (const log of parsed) {
       if (log.transactionHash === null) continue;
-      map.set(log.transactionHash, {
+      map.set(reapKey(log.transactionHash, log.args.agentId), {
         due6: log.args.due6,
         collected6: log.args.collected6,
         balance6: log.args.balance6,
@@ -227,6 +273,7 @@ export class ChainIndexer implements Driver {
       const block = log.blockNumber;
       const index = log.logIndex;
       const txHash = log.transactionHash;
+      const tx = log.transactionIndex ?? 0;
       if (block === null || index === null || txHash === null) continue;
 
       if (log.eventName === 'Spawned') {
@@ -235,6 +282,8 @@ export class ChainIndexer implements Driver {
         const at = Number(args.at);
         actions.push({
           block,
+          tx,
+          phase: PHASE_SPAWN,
           index,
           run: () => {
             // A re-delivered Spawned would otherwise zero an agent's books.
@@ -269,9 +318,11 @@ export class ChainIndexer implements Driver {
         const args = log.args;
         const id = Number(args.agentId);
         const at = Number(args.at);
-        const cause = causeOfDeath(reaps.get(txHash));
+        const cause = causeOfDeath(reaps.get(reapKey(txHash, args.agentId)));
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             const record = this.store.agent(id);
@@ -309,6 +360,8 @@ export class ChainIndexer implements Driver {
         const finalBalance6 = args.finalBalance6;
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             this.store.setBalance(id, finalBalance6, at);
@@ -324,6 +377,8 @@ export class ChainIndexer implements Driver {
         const endpoint = args.endpoint;
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             this.store.setEndpoint(id, endpoint === '' ? null : endpoint);
@@ -354,6 +409,7 @@ export class ChainIndexer implements Driver {
       const block = log.blockNumber;
       const index = log.logIndex;
       const txHash = log.transactionHash;
+      const tx = log.transactionIndex ?? 0;
       if (block === null || index === null || txHash === null) continue;
 
       const args = log.args;
@@ -378,6 +434,8 @@ export class ChainIndexer implements Driver {
       };
       actions.push({
         block,
+        tx,
+        phase: PHASE_DEFAULT,
         index,
         run: () => {
           if (this.store.ingestEntry(entry)) {
@@ -394,6 +452,7 @@ export class ChainIndexer implements Driver {
       const block = log.blockNumber;
       const index = log.logIndex;
       const txHash = log.transactionHash;
+      const tx = log.transactionIndex ?? 0;
       if (block === null || index === null || txHash === null) continue;
 
       if (log.eventName === 'BountyPosted') {
@@ -417,7 +476,13 @@ export class ChainIndexer implements Driver {
           submittedAt: null,
           txHash,
         };
-        actions.push({ block, index, run: () => this.store.upsertBounty(bounty) });
+        actions.push({
+          block,
+          tx,
+          phase: PHASE_DEFAULT,
+          index,
+          run: () => this.store.upsertBounty(bounty),
+        });
         continue;
       }
 
@@ -429,6 +494,8 @@ export class ChainIndexer implements Driver {
         const deliverableURI = args.deliverableURI;
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             const existing = this.store.bounty(id);
@@ -452,6 +519,8 @@ export class ChainIndexer implements Driver {
         const agentId = Number(args.agentId);
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             const existing = this.store.bounty(id);
@@ -471,6 +540,8 @@ export class ChainIndexer implements Driver {
         const id = Number(log.args.bountyId);
         actions.push({
           block,
+          tx,
+          phase: PHASE_DEFAULT,
           index,
           run: () => {
             const existing = this.store.bounty(id);
@@ -503,44 +574,69 @@ export class ChainIndexer implements Driver {
     }
 
     for (let block = start; block <= to && this.running; block++) {
-      try {
-        const mined = await this.client.getBlock({
-          blockNumber: block,
-          includeTransactions: true,
+      await this.scanGasBlock(block);
+    }
+  }
+
+  /**
+   * Replay the blocks whose gas scan failed, before anything newer is indexed.
+   *
+   * The range cursor never walks backwards, so without this a block abandoned
+   * mid-scan is never visited again and its burn is lost for good — silently,
+   * which is the one thing R7 does not allow.
+   */
+  private async retryGasGaps(): Promise<void> {
+    const pending = this.store.gasGaps();
+    if (pending.length === 0) return;
+    console.warn(`[chain] re-scanning ${pending.length} block(s) with missing gas`);
+    for (const block of pending) {
+      if (!this.running) return;
+      await this.scanGasBlock(BigInt(block));
+    }
+  }
+
+  /** One block's agent gas. A block that throws is remembered, not shrugged off. */
+  private async scanGasBlock(block: bigint): Promise<void> {
+    try {
+      const mined = await this.client.getBlock({
+        blockNumber: block,
+        includeTransactions: true,
+      });
+      const at = Number(mined.timestamp);
+      for (const [position, tx] of mined.transactions.entries()) {
+        if (typeof tx === 'string') continue;
+        const agent = this.store.agentByWallet(tx.from);
+        if (!agent) continue;
+
+        const id = `${block}-gas-${tx.transactionIndex ?? position}`;
+        if (this.store.hasEntry(id)) continue;
+
+        const receipt = await this.client.getTransactionReceipt({ hash: tx.hash });
+        this.store.bumpTxCount(agent.id, 1);
+
+        const fee18: Native18 = receipt.gasUsed * receipt.effectiveGasPrice;
+        const fee6 = nativeToUsdc6(fee18);
+        if (fee6 <= 0n) continue;
+
+        this.store.ingestEntry({
+          id,
+          agentId: agent.id,
+          flow: 'BURN',
+          category: 'GAS',
+          amount6: fee6.toString(),
+          counterparty: tx.to ?? ZERO_ADDRESS,
+          memo: `gas ${receipt.gasUsed} @ ${receipt.effectiveGasPrice}`,
+          at,
+          txHash: tx.hash,
+          blockNumber: Number(block),
         });
-        const at = Number(mined.timestamp);
-        for (const [position, tx] of mined.transactions.entries()) {
-          if (typeof tx === 'string') continue;
-          const agent = this.store.agentByWallet(tx.from);
-          if (!agent) continue;
-
-          const id = `${block}-gas-${tx.transactionIndex ?? position}`;
-          if (this.store.hasEntry(id)) continue;
-
-          const receipt = await this.client.getTransactionReceipt({ hash: tx.hash });
-          this.store.bumpTxCount(agent.id, 1);
-
-          const fee18: Native18 = receipt.gasUsed * receipt.effectiveGasPrice;
-          const fee6 = nativeToUsdc6(fee18);
-          if (fee6 <= 0n) continue;
-
-          this.store.ingestEntry({
-            id,
-            agentId: agent.id,
-            flow: 'BURN',
-            category: 'GAS',
-            amount6: fee6.toString(),
-            counterparty: tx.to ?? ZERO_ADDRESS,
-            memo: `gas ${receipt.gasUsed} @ ${receipt.effectiveGasPrice}`,
-            at,
-            txHash: tx.hash,
-            blockNumber: Number(block),
-          });
-        }
-      } catch (err) {
-        // One bad block must not stall the whole range; the next pass retries it.
-        console.warn(`[chain] gas scan failed at block ${block}: ${String(err)}`);
       }
+      this.store.clearGasGap(Number(block));
+    } catch (err) {
+      // The whole block is abandoned here, not just the failing transaction, so
+      // record it and keep /api/health honest until it has been read.
+      this.store.markGasGap(Number(block));
+      console.warn(`[chain] gas scan failed at block ${block}, queued for retry: ${String(err)}`);
     }
   }
 

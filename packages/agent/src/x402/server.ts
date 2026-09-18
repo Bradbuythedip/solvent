@@ -218,12 +218,19 @@ export function createServiceApp(options: ServiceOptions): Hono {
     if (recomputed !== payment.requestHash) {
       return c.json({ ...requirementsFor(options, url, price6), error: 'requestHash does not match its inputs' }, 402);
     }
+    // Claim the receipt here, synchronously, before the first await. Testing
+    // membership and adding after the settlement lookup would leave the whole
+    // RPC round trip open: every concurrent request carrying the same receipt
+    // would see an empty set and every one of them would be served for one
+    // payment. The claim is released below only if verification says no.
     if (spent.has(recomputed)) {
       return c.json({ ...requirementsFor(options, url, price6), error: 'receipt already used' }, 402);
     }
+    spent.add(recomputed);
 
     const settled = await verifySettlement(options, recomputed, price6);
     if (!settled.ok) {
+      spent.delete(recomputed);
       logger.warn('rejected an x402 request', { requestHash: recomputed, reason: settled.reason });
       return c.json(
         { ...requirementsFor(options, url, price6), error: settled.reason ?? 'settlement not found' },
@@ -231,7 +238,6 @@ export function createServiceApp(options: ServiceOptions): Hono {
       );
     }
 
-    spent.add(recomputed);
     logger.info('served a paid request', {
       requestHash: recomputed,
       amount6: settled.amount6,

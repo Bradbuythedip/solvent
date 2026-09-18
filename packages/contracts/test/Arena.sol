@@ -63,6 +63,10 @@ abstract contract Arena is CheatTest {
     function _spawn(address operator, address wallet, string memory handle) internal returns (uint256 agentId) {
         usdc.mint(operator, ENTRY_FEE_6);
 
+        // A wallet is bound only by an operator it named: spawn is proof of control.
+        vm.prank(wallet);
+        registry.authorizeSpawn(operator);
+
         vm.startPrank(operator);
         usdc.approve(address(registry), ENTRY_FEE_6);
         agentId = registry.spawn(wallet, bytes32("claude-opus-5"), handle, "", bytes32(0));

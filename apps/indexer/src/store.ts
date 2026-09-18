@@ -27,6 +27,12 @@ const MAX_SPARK_POINTS = 64;
 const RECENT_BURN_SECONDS = 6 * 3600;
 const RECENT_BURN_KEEP = 128;
 const SEEN_ENTRY_CAP = 200_000;
+/**
+ * Ceiling on remembered gas gaps. Every gap is retried, so the set only grows
+ * while the RPC keeps failing; the cap is a memory guard and not a way to forget
+ * one, because health stays not-ok for as long as the set is non-empty.
+ */
+const GAS_GAP_CAP = 50_000;
 const SNAPSHOT_VERSION = 1;
 
 /** A raw bigint in JSON.stringify throws. Everything crossing the wire uses this. */
@@ -105,6 +111,8 @@ export interface DriverStatus {
   ok: boolean;
   head: number;
   lag: number;
+  /** Blocks whose gas is known to be missing from the P&L (R3). */
+  gasGapBlocks: number;
 }
 
 /** Whatever fills the store: the chain reader or the simulator. */
@@ -145,11 +153,18 @@ export class Store {
   private readonly deathRows: Row<InsolvencyRecord>[] = [];
   private readonly bountyById = new Map<number, Bounty>();
   private readonly seenEntryIds = new Set<string>();
+  private readonly gasGapBlocks = new Set<number>();
   private readonly listeners = new Set<(event: StoreEvent) => void>();
 
   private seq = 0;
 
   head = 0;
+  /**
+   * The resume watermark: the highest block that is indexed COMPLETELY, gas
+   * included. Only setIndexed moves it, and only once the range's gas scan has
+   * run — a log seen mid-range must not advance it, or a restart would resume
+   * past blocks the gas scanner never reached and drop their burn for good (R3).
+   */
   lastIndexedBlock = 0;
   indexedAt = 0;
   /** Bumped on every mutation so the stats broadcaster can skip quiet periods. */
@@ -323,7 +338,6 @@ export class Store {
         this.pruneRecentBurn(record, entry.at);
       }
     }
-    if (entry.blockNumber > this.lastIndexedBlock) this.lastIndexedBlock = entry.blockNumber;
     this.version += 1;
     if (!options.silent) this.emit({ kind: 'entry', entry });
     return true;
@@ -440,7 +454,6 @@ export class Store {
       agent.causeOfDeath = record.causeOfDeath;
       this.pushSpark(agent, record.at);
     }
-    if (record.blockNumber > this.lastIndexedBlock) this.lastIndexedBlock = record.blockNumber;
     this.version += 1;
     if (!options.silent) this.emit({ kind: 'insolvency', record });
     return true;
@@ -492,6 +505,40 @@ export class Store {
     this.indexedAt = nowSeconds();
   }
 
+  /* -------------------------------------------------------------- gas gaps */
+
+  /**
+   * Blocks whose gas scan failed and has not been replayed.
+   *
+   * On Arc gas is dollars (R3), so an unread block is burn we know we are
+   * missing. That is a fact about the ledger, not a log line: it is remembered
+   * here, retried by the chain reader, and kept out of /api/health's `ok` until
+   * it is booked, because a quietly incomplete number is worse than a missing
+   * one (R7).
+   */
+  markGasGap(block: number): void {
+    if (this.gasGapBlocks.has(block)) return;
+    if (this.gasGapBlocks.size >= GAS_GAP_CAP) {
+      console.warn(`[store] gas gap set full at ${GAS_GAP_CAP}; block ${block} not tracked`);
+      return;
+    }
+    this.gasGapBlocks.add(block);
+    this.version += 1;
+  }
+
+  clearGasGap(block: number): void {
+    if (this.gasGapBlocks.delete(block)) this.version += 1;
+  }
+
+  /** Oldest first, so a replay walks the chain forwards. */
+  gasGaps(): number[] {
+    return [...this.gasGapBlocks].sort((a, b) => a - b);
+  }
+
+  gasGapCount(): number {
+    return this.gasGapBlocks.size;
+  }
+
   /* ------------------------------------------------------------- snapshot */
 
   snapshotPath(): string {
@@ -506,6 +553,7 @@ export class Store {
       savedAt: nowSeconds(),
       head: this.head,
       lastIndexedBlock: this.lastIndexedBlock,
+      gasGaps: this.gasGaps(),
       agents: this.agents().map(toWireAgent),
       tape: this.entries(),
       deaths: this.deaths(),
@@ -554,6 +602,9 @@ export class Store {
         this.deathRows.push({ seq: this.seq, value: death });
       }
       for (const bounty of file.bounties ?? []) this.bountyById.set(bounty.id, bounty);
+      for (const block of file.gasGaps ?? []) {
+        if (typeof block === 'number' && Number.isFinite(block)) this.gasGapBlocks.add(block);
+      }
       this.head = file.head ?? 0;
       this.lastIndexedBlock = file.lastIndexedBlock ?? 0;
       this.version += 1;
@@ -600,6 +651,8 @@ interface SnapshotFile {
   savedAt: number;
   head: number;
   lastIndexedBlock: number;
+  /** Blocks still owed a gas scan; absent in snapshots written before R3 gaps were tracked. */
+  gasGaps: number[];
   agents: WireAgent[];
   tape: LedgerEntry[];
   deaths: InsolvencyRecord[];

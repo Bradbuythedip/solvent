@@ -213,6 +213,101 @@ contract MetabolismTest is Arena {
         assertEq(ledger.burned6(agentId), LISTING_CUT_6, "nothing could be collected");
     }
 
+    // --- a broken treasury is not the agent's failure -----------------------
+
+    function test_aBrokenTreasuryDoesNotKillASolventAgent() public {
+        // Circle blacklists the treasury, or an owner points it somewhere that
+        // cannot receive. The agent can plainly pay, and death is permanent.
+        usdc.setFrozen(TREASURY, true);
+        _skip(3600);
+
+        uint256 due = metabolism.owed6(agentId);
+        assertGt(metabolism.payable6(agentId), due, "the agent can plainly pay");
+
+        vm.prank(REAPER);
+        bool died = metabolism.reap(agentId);
+
+        assertFalse(died, "somebody else's problem is not insolvency");
+        assertTrue(registry.statusOf(agentId) == SolventRegistry.Status.ALIVE, "still alive");
+        assertEq(usdc.balanceOf(WALLET), ENTRY_SEED_6 - due, "rent was taken all the same");
+        assertEq(metabolism.pendingTreasury6(), due, "and parked until the treasury can take it");
+        assertEq(ledger.burned6(agentId), LISTING_CUT_6 + due, "booked as the agent's burn");
+
+        usdc.setFrozen(TREASURY, false);
+        uint256 treasuryBefore = usdc.balanceOf(TREASURY);
+        metabolism.sweepToTreasury();
+        assertEq(usdc.balanceOf(TREASURY) - treasuryBefore, due, "swept once the door reopened");
+        assertEq(metabolism.pendingTreasury6(), 0, "nothing left held");
+    }
+
+    function test_aBrokenTreasuryCannotWipeTheArena() public {
+        uint256 second = _spawn(address(0x0B2), address(0xB0B), "bob");
+        usdc.setFrozen(TREASURY, true);
+        _skip(3600);
+
+        uint256[] memory ids = new uint256[](2);
+        ids[0] = agentId;
+        ids[1] = second;
+
+        vm.prank(REAPER);
+        assertEq(metabolism.reapMany(ids), 0, "no deaths: both agents paid");
+        assertTrue(registry.isAlive(agentId), "alice lived");
+        assertTrue(registry.isAlive(second), "bob lived");
+    }
+
+    // --- rent is conserved across reaps -------------------------------------
+
+    function test_reapCadenceDoesNotChangeTheRent() public {
+        uint256 second = _spawn(address(0x0B2), address(0xB0B), "bob");
+
+        // alice is reaped every second; bob once at the end. Same life, same rate.
+        for (uint256 i = 0; i < 60; ++i) {
+            _skip(1);
+            vm.prank(REAPER);
+            metabolism.reap(agentId);
+        }
+
+        uint256 due = metabolism.owed6(second);
+        vm.prank(REAPER);
+        metabolism.reap(second);
+
+        uint256 alicePaid = ledger.burned6(agentId) - LISTING_CUT_6;
+        uint256 bobPaid = ledger.burned6(second) - LISTING_CUT_6;
+
+        assertEq(due, 166, "60 seconds at $0.01/hour is 166 units");
+        assertEq(bobPaid, 166, "one reap bills the whole window");
+        assertEq(alicePaid, bobPaid, "sixty reaps bill exactly the same");
+        assertEq(metabolism.owed6(agentId), 0, "and nothing is left owing");
+    }
+
+    // --- a rate change is forward-only --------------------------------------
+
+    function test_aRateChangeIsNotRetroactive() public {
+        _skip(3600 * 100); // $1.00 of unsettled rent at the old price
+        assertEq(metabolism.owed6(agentId), 1_000_000, "a hundred hours at $0.01");
+
+        metabolism.setRentPerHour6(100_000); // ten times the price, from now on
+        assertEq(metabolism.owed6(agentId), 1_000_000, "the hours already lived keep their price");
+
+        _skip(3600);
+        assertEq(metabolism.owed6(agentId), 1_100_000, "the new hour costs the new rate");
+
+        vm.prank(REAPER);
+        assertFalse(metabolism.reap(agentId), "a repricing is not a kill switch");
+        assertTrue(registry.isAlive(agentId), "still alive");
+    }
+
+    function test_aRateCutDoesNotDiscountHoursAlreadyLived() public {
+        _skip(3600 * 100);
+        metabolism.setRentPerHour6(1_000);
+        assertEq(metabolism.owed6(agentId), 1_000_000, "the treasury keeps what it earned");
+    }
+
+    function test_theTokenCannotBeRepointedUnderLiveAgents() public {
+        vm.expectRevert(abi.encodeWithSelector(Metabolism.ArenaLive.selector, registry.totalAgents()));
+        metabolism.setUsdc(address(0xBAD));
+    }
+
     function test_onlyTheRegistryCanEnroll() public {
         vm.expectRevert(abi.encodeWithSelector(Metabolism.NotRegistry.selector, address(this)));
         metabolism.enroll(42);
