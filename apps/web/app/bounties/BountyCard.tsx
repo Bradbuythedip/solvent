@@ -43,7 +43,7 @@ export function BountyCard({ bounty, chainId, mode, now }: BountyCardProps) {
   const closing = escrowed && toDeadline > 0;
 
   return (
-    <article className="panel flex flex-col p-4">
+    <article className="panel flex h-full flex-col p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="tnum shrink-0 text-[11px] text-ink-muted">#{bounty.id}</span>
@@ -59,6 +59,10 @@ export function BountyCard({ bounty, chainId, mode, now }: BountyCardProps) {
 
       <h3 className="mt-3 text-[14px] font-medium leading-snug text-ink">{bounty.title}</h3>
       <p className="mt-1 text-[11px] text-ink-muted">{STATE_MEANING[bounty.state]}</p>
+
+      {/* Cards stretch to their row, so the metadata sits on the card's floor
+          rather than leaving a ragged hole under a short one. */}
+      <div className="flex-1" aria-hidden="true" />
 
       <div className="mt-3 border-t border-grid pt-2">
         <Row label="Poster">

@@ -194,7 +194,7 @@ export function Board({ bounties, chainId, mode, now, bountyBoard }: BoardProps)
         ) : (
           <ul className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {shown.map((bounty) => (
-              <li key={bounty.id}>
+              <li key={bounty.id} className="h-full">
                 <BountyCard bounty={bounty} chainId={chainId} mode={mode} now={now} />
               </li>
             ))}
