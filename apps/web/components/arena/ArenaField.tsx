@@ -34,6 +34,10 @@ import { useStream } from '@/lib/stream';
 const TAU = Math.PI * 2;
 const MAX_ORBS = 260;
 const EDGE = 8;
+/** The faint outer glow is drawn at this multiple of the orb radius. */
+const HALO = 2.1;
+/** How much of that glow must stay inside the field when an orb bounces. */
+const HALO_KEEP = 0.72;
 /** Orbs together cover this share of the field, whatever the count or screen. */
 const COVERAGE = 0.11;
 const FLARE_SECONDS = 0.9;
@@ -124,6 +128,8 @@ export function ArenaField({ orbits, aliveCount }: { orbits: Orbit[]; aliveCount
   const tipRef = useRef<HTMLDivElement | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
   const drawRef = useRef<Orb[]>([]);
+  /** Reused across frames so label collision testing allocates nothing. */
+  const labelBoxRef = useRef<{ left: number; right: number; top: number; bottom: number }[]>([]);
 
   const byId = useMemo(() => new Map(roster.map((o) => [o.id, o] as const)), [roster]);
 
@@ -146,7 +152,7 @@ export function ArenaField({ orbits, aliveCount }: { orbits: Orbit[]; aliveCount
 
     for (const o of orbs.values()) {
       o.r = Math.min(rMax, Math.max(2.5, base * Math.sqrt(Math.max(o.weight, 0) / sum)));
-      const margin = o.r + EDGE;
+      const margin = o.r * (1 + (HALO - 1) * HALO_KEEP) + EDGE;
 
       if (!o.placed) {
         o.x = margin + unit(o.id, 3) * Math.max(1, w - 2 * margin);
@@ -213,7 +219,7 @@ export function ArenaField({ orbits, aliveCount }: { orbits: Orbit[]; aliveCount
 
       ctx.globalAlpha = alpha * 0.13;
       ctx.beginPath();
-      ctx.arc(o.x, o.y, o.r * 2.1, 0, TAU);
+      ctx.arc(o.x, o.y, o.r * HALO, 0, TAU);
       ctx.fill();
 
       ctx.globalAlpha = alpha * 0.88;
@@ -236,15 +242,6 @@ export function ArenaField({ orbits, aliveCount }: { orbits: Orbit[]; aliveCount
         ctx.stroke();
       }
 
-      if (o.death === 0 && (o.r >= 13 || o.id === hoverId)) {
-        ctx.globalAlpha = o.id === hoverId ? 1 : 0.7;
-        ctx.fillStyle = ink;
-        ctx.font = '500 10px ui-monospace, SFMono-Regular, Menlo, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.fillText(o.handle, o.x, o.y + o.r + 6);
-      }
-
       if (o.id === hoverId && o.death === 0) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = ink;
@@ -253,6 +250,55 @@ export function ArenaField({ orbits, aliveCount }: { orbits: Orbit[]; aliveCount
         ctx.arc(o.x, o.y, o.r + 6, 0, TAU);
         ctx.stroke();
       }
+    }
+
+    // Labels are a second pass so no orb is ever painted over a name, and a
+    // greedy largest-first placement drops any label that would collide with one
+    // already down. A name half under another name is worse than no name: the
+    // orb is still hoverable, and the leaderboard carries every row regardless.
+    ctx.font = '500 10px ui-monospace, SFMono-Regular, Menlo, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = ink;
+
+    const boxes = labelBoxRef.current;
+    boxes.length = 0;
+
+    for (const o of list) {
+      if (o.death !== 0) continue;
+      const hovered = o.id === hoverId;
+      if (!hovered && o.r < 13) continue;
+
+      const textWidth = ctx.measureText(o.handle).width;
+      const left = o.x - textWidth / 2 - 3;
+      const top = o.y + o.r + 6;
+      const right = left + textWidth + 6;
+      const bottom = top + 12;
+
+      // A label that would run off the field is worse than none, except for the
+      // one the pointer is on, which is nudged back inside instead.
+      let dx = 0;
+      if (hovered) {
+        if (left < 2) dx = 2 - left;
+        else if (right > w - 2) dx = w - 2 - right;
+      } else if (left < 2 || right > w - 2) {
+        continue;
+      }
+
+      if (!hovered) {
+        let collides = false;
+        for (const b of boxes) {
+          if (left < b.right && right > b.left && top < b.bottom && bottom > b.top) {
+            collides = true;
+            break;
+          }
+        }
+        if (collides) continue;
+      }
+
+      boxes.push({ left: left + dx, right: right + dx, top, bottom });
+      ctx.globalAlpha = hovered ? 1 : 0.7;
+      ctx.fillText(o.handle, o.x + dx, top);
     }
 
     ctx.globalAlpha = 1;

@@ -69,6 +69,12 @@
 html {
   background: var(--color-page);
   -webkit-text-size-adjust: 100%;
+  /* `clip`, not `hidden`: it stops decorative bleed (the .bloom glow, the plane
+     gradients) from extending the scroll area, without making <html> a scroll
+     container — which would break every `position: sticky` in the app. Real
+     horizontal scrollers (wide tables, code blocks) carry their own
+     `overflow-x: auto` and are unaffected. */
+  overflow-x: clip;
 }
 
 body {
@@ -145,9 +151,7 @@ body {
    "flat black rectangle" and "a surface". */
 .grain {
   position: fixed;
-  inset: -50%;
-  width: 200%;
-  height: 200%;
+  inset: 0;
   pointer-events: none;
   z-index: 1;
   opacity: 0.028;
@@ -194,7 +198,7 @@ body {
 .bloom::before {
   content: '';
   position: absolute;
-  inset: -40% -18%;
+  inset: -40% -8%;
   background: radial-gradient(ellipse at center, var(--bloom-color, var(--color-solvent)), transparent 68%);
   opacity: 0.18;
   filter: blur(36px);

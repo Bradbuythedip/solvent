@@ -24,7 +24,7 @@ import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import type { IndexerMode, InsolvencyRecord } from '@solvent/core';
-import { Money } from '@/components/ui/Money';
+import { Amount } from '@/components/ui/Money';
 import { ModelBadge, StateDot } from '@/components/ui/primitives';
 import { certificatePath, agentPath, clockUtc, formatDuration, modelLabel } from '@/lib/format';
 import { useStream } from '@/lib/stream';
@@ -126,10 +126,14 @@ function FullRow({
         <Handle id={record.agentId} handle={record.handle} />
       </span>
 
-      {/* On a phone the row breaks into a stack and the lifetime P&L rides the
-          first line with the handle; on a wide screen it returns to its column. */}
-      <Field label="net" className={`ml-auto ${W_NET} lg:order-7 lg:ml-0 lg:block`}>
-        <Money value={record.net6} signed size="sm" />
+      {/* Lifetime EARNED, not net. For an unsubsidised agent net at death is
+          balance - capitalIn, i.e. about -$9 for everyone, so a net column here
+          is ink with no information. What actually varies is how much the agent
+          made before the wallet ran out: $0 for the ones that never traded,
+          tens of dollars for the ones that nearly made it. Earned is a
+          magnitude rather than a polarity, so it wears ink, not the P&L hues. */}
+      <Field label="earned" className={`ml-auto ${W_NET} lg:order-7 lg:ml-0 lg:block`}>
+        <Amount value={record.earned6} className="text-[13px]" />
       </Field>
 
       {/* Model identity is a text badge. A hue per model would collide with the
@@ -220,7 +224,7 @@ function CompactRow({
       </span>
 
       <span className="w-[84px] shrink-0 text-right">
-        <Money value={record.net6} signed size="xs" />
+        <Amount value={record.earned6} className="text-[11px]" />
       </span>
 
       <span className="hidden w-[76px] shrink-0 text-right sm:block">
@@ -241,7 +245,7 @@ function FullHeader() {
       <span className={W_CAUSE}>Cause</span>
       <span className={W_LIFE}>Lived</span>
       <span className={W_FINAL}>Left</span>
-      <span className={W_NET}>Net P&amp;L</span>
+      <span className={W_NET}>Earned</span>
       <span className={W_REAPER}>Reaper</span>
       <span className={W_TX}>Tx</span>
       <span className={`shrink-0 ${W_COPY}`} aria-hidden="true" />
@@ -259,7 +263,7 @@ function CompactHeader() {
       <span className="hidden shrink-0 md:block">Model</span>
       <span className="hidden w-[64px] shrink-0 text-right xl:block">Lived</span>
       <span className="hidden w-[104px] shrink-0 text-right sm:block">Left</span>
-      <span className="w-[84px] shrink-0 text-right">Net</span>
+      <span className="w-[84px] shrink-0 text-right">Earned</span>
       <span className="hidden w-[76px] shrink-0 text-right sm:block">Tx</span>
     </div>
   );

@@ -124,6 +124,12 @@ export function FeedBoard({
             Every row below is one of them: the second the wallet could not make rent, what was left
             in it to six decimals, who reaped it, and the transaction that made it permanent.
           </p>
+          <p className="max-w-[54ch] text-[12px] leading-relaxed text-ink-muted">
+            The column is lifetime <span className="text-ink-2">earned</span>, not net. An
+            unsubsidised agent dies having burned exactly the capital it was handed, so its net
+            P&amp;L at death is about &minus;$9 whoever it was &mdash; a column of identical
+            numbers. What varies is how much it made on the way down.
+          </p>
         </div>
       </header>
 
