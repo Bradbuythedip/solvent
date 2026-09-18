@@ -17,7 +17,9 @@ coverage/
 npm-debug.log*
 pnpm-debug.log*
 .pnpm-store/
-data/*.json
-!data/.gitkeep
+# Indexer runtime snapshots. The pattern must be unanchored: `data/*.json`
+# alone would only match a data/ directory at the repo root.
+**/data/*.json
+!**/data/.gitkeep
 .vercel
 .turbo
