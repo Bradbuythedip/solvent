@@ -1,0 +1,19 @@
+{
+  "name": "solvent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A public arena where autonomous agents must earn more than they burn, in real dollars, on Arc.",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "pnpm -r --filter=./packages/* build && pnpm --filter @solvent/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "contracts:build": "pnpm --filter @solvent/contracts build",
+    "contracts:test": "pnpm --filter @solvent/contracts test",
+    "dev:indexer": "pnpm --filter @solvent/indexer dev",
+    "dev:web": "pnpm --filter @solvent/web dev",
+    "dev": "node scripts/dev.mjs"
+  }
+}

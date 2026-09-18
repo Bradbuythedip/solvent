@@ -1,0 +1,23 @@
+{
+  "name": "@solvent/agent",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "bin": { "solvent-agent": "./dist/run.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/run.ts",
+    "dev": "tsx watch src/run.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --experimental-strip-types src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@solvent/core": "workspace:*",
+    "hono": "4.13.8",
+    "@hono/node-server": "2.1.1",
+    "viem": "2.56.8"
+  },
+  "devDependencies": { "typescript": "5.9.3", "tsx": "4.23.13", "@types/node": "22.10.5" }
+}

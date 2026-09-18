@@ -1,0 +1,299 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+   SOLVENT — design tokens
+   A financial terminal for things that can die.
+
+   Every colour below was selected by running the palette validator, not by eye.
+   Marks: ALL CHECKS PASS on surface #0E1116 — worst all-pairs CVD ΔE 12.7
+   (deuteranopia), normal-vision ΔE 20.1, all inside the dark lightness band.
+   Green↔red was rejected at CVD ΔE 7.4: this product's most important encoding
+   is a P&L sign, and it may not fail for 1 in 12 men.
+   ========================================================================== */
+
+@theme {
+  /* Surfaces */
+  --color-page: #07090c;
+  --color-panel: #0e1116;
+  --color-raised: #151a21;
+  --color-grid: #1c2230;
+  --color-border: #2a3142;
+  --color-border-strong: #3a4357;
+
+  /* Ink — 16.4 : 9.0 : 4.2 contrast on --color-page */
+  --color-ink: #e8e9ed;
+  --color-ink-2: #a7afbc;
+  --color-ink-muted: #6b7484;
+
+  /* Chart MARKS (fills, bars, dots) */
+  --color-solvent: #00a6c0;
+  --color-insolvent: #c9304a;
+  --color-dying: #c4870f;
+
+  /* Value TEXT steps — WCAG 12.5 / 8.0 / 11.3 : 1 on --color-page */
+  --color-pos: #3de0f5;
+  --color-neg: #ff7a90;
+  --color-warn: #f5b94a;
+
+  /* Runway ordinal ramp — monotone L, single hue, light end 2.39:1 */
+  --color-runway-1: #115566;
+  --color-runway-2: #12708a;
+  --color-runway-3: #1a9fb5;
+  --color-runway-4: #2cc4de;
+  --color-runway-5: #3de0f5;
+
+  /* Type */
+  --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+
+  /* Motion */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+  --gutter: 16px;
+}
+
+@media (min-width: 768px) {
+  :root { --gutter: 32px; }
+}
+
+* { border-color: var(--color-border); }
+
+html {
+  background: var(--color-page);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background: var(--color-page);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv05' 1, 'ss01' 1;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-solvent) 35%, transparent);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-pos);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Scrollbars, so the terminal feel survives the chrome */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border: 3px solid var(--color-page);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--color-border-strong); }
+
+/* ==========================================================================
+   The plane — hairline grid + bloom + grain.
+   Three stacked layers, all pointer-events:none, all behind content.
+   ========================================================================== */
+
+.plane {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.plane::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+  background-position: center top;
+  -webkit-mask-image: radial-gradient(ellipse 100% 70% at 50% 0%, #000 0%, transparent 78%);
+  mask-image: radial-gradient(ellipse 100% 70% at 50% 0%, #000 0%, transparent 78%);
+  opacity: 0.55;
+}
+
+.plane::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 42% at 50% -8%, color-mix(in oklab, var(--color-solvent) 16%, transparent), transparent 70%),
+    radial-gradient(ellipse 45% 30% at 88% 4%, color-mix(in oklab, var(--color-insolvent) 7%, transparent), transparent 70%);
+}
+
+/* Film grain — 2.5% opacity. On near-black this is the difference between
+   "flat black rectangle" and "a surface". */
+.grain {
+  position: fixed;
+  inset: -50%;
+  width: 200%;
+  height: 200%;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.028;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ==========================================================================
+   Primitives
+   ========================================================================== */
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  position: relative;
+}
+
+/* A hairline that reads as a rule, not a box. */
+.rule { border: 0; border-top: 1px solid var(--color-border); }
+
+.mono { font-family: var(--font-mono); }
+
+/* tabular-nums in COLUMNS only; hero figures keep proportional figures so
+   large numbers don't look loose. */
+.tnum { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+
+.hero-figure {
+  font-family: var(--font-mono);
+  font-variant-numeric: normal;
+  letter-spacing: -0.03em;
+  line-height: 0.92;
+}
+
+.label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+  font-weight: 500;
+}
+
+/* The bloom behind a big number. Sized by the caller. */
+.bloom { position: relative; }
+.bloom::before {
+  content: '';
+  position: absolute;
+  inset: -40% -18%;
+  background: radial-gradient(ellipse at center, var(--bloom-color, var(--color-solvent)), transparent 68%);
+  opacity: 0.18;
+  filter: blur(36px);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ==========================================================================
+   Motion
+   ========================================================================== */
+
+@keyframes solvent-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
+.pulse { animation: solvent-pulse 2.4s var(--ease-in-out-quart) infinite; }
+
+@keyframes tape-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.tape-in { animation: tape-in 420ms var(--ease-out-quint) both; }
+
+/* The death flash: a single red sweep across a newly arrived tape row. */
+@keyframes death-flash {
+  0% { background-color: color-mix(in oklab, var(--color-insolvent) 34%, transparent); }
+  100% { background-color: transparent; }
+}
+.death-flash { animation: death-flash 2200ms var(--ease-out-quint) both; }
+
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(200%); }
+}
+.sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--color-pos) 22%, transparent), transparent);
+  animation: sweep 1.8s var(--ease-in-out-quart) infinite;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .grain { display: none; }
+}
+
+/* ==========================================================================
+   Data tables — the leaderboard is a table, and it should look like one.
+   ========================================================================== */
+
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in oklab, var(--color-page) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+  font-weight: 500;
+  text-align: left;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+.data-table tbody td {
+  border-bottom: 1px solid var(--color-grid);
+  padding: 11px 12px;
+  font-size: 13px;
+  vertical-align: middle;
+}
+.data-table tbody tr { transition: background-color 140ms var(--ease-out-quint); }
+.data-table tbody tr:hover { background: var(--color-raised); }
+
+/* ==========================================================================
+   Accessibility helpers
+   ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Forced colours: fall back to system semantics rather than invisible marks. */
+@media (forced-colors: active) {
+  .panel { border: 1px solid CanvasText; }
+  .plane, .grain { display: none; }
+}
