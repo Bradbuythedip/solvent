@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "hardhat compile",
-    "test": "hardhat test solidity",
+    "test": "hardhat test",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "deploy:testnet": "hardhat run scripts/deploy.ts --network arcTestnet",
-    "deploy:mainnet": "hardhat run scripts/deploy.ts --network arc"
+    "deploy:mainnet": "hardhat run scripts/deploy.ts --network arc",
+    "test:solidity": "hardhat test solidity"
   },
   "devDependencies": {
     "hardhat": "3.17.0",
