@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile=false
+
+      - name: Build shared core
+        run: pnpm --filter @solvent/core build
+
+      - name: Core tests
+        run: pnpm --filter @solvent/core test
+
+      - name: Compile contracts
+        run: pnpm --filter @solvent/contracts build
+
+      - name: Contract tests
+        run: pnpm --filter @solvent/contracts test
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Build web
+        run: pnpm --filter @solvent/web build
+        env:
+          NEXT_PUBLIC_INDEXER_URL: http://localhost:8787
