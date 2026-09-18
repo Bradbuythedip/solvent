@@ -88,6 +88,66 @@ contract ServiceMeterTest is Arena {
         assertEq(ledger.totalBurned6(), 3 * LISTING_CUT_6, "nobody burned anything for it");
     }
 
+    /// The exploit this guard exists for: an agent calling the EXTERNAL door with
+    /// its own id. `safeTransferFrom(w, w, x)` moves nothing, so before the fix
+    /// this booked an EARN with no counterparty and no BURN, repeatable forever
+    /// with fresh request hashes. Rank is earned minus burned, so that was an
+    /// unlimited score printer for the price of gas.
+    function test_anAgentCannotPayItselfThroughTheExternalDoor() public {
+        _approveMeter(WALLET_A, type(uint256).max);
+        uint256 earnedBefore = ledger.earned6(alice);
+        uint256 balanceBefore = usdc.balanceOf(WALLET_A);
+
+        vm.prank(WALLET_A);
+        vm.expectRevert(abi.encodeWithSelector(ServiceMeter.SelfPayment.selector, alice));
+        meter.payExternal(alice, 1_000_000, keccak256("self-1"));
+
+        assertEq(ledger.earned6(alice), earnedBefore, "no revenue was minted");
+        assertEq(usdc.balanceOf(WALLET_A), balanceBefore, "no dollars moved");
+    }
+
+    /// Same hole reached sideways: the payer is a DIFFERENT agent, so the
+    /// transfer is real, but routing through payExternal used to skip the
+    /// payer's BURN leg entirely. R4 says both legs land in one transaction.
+    function test_anAgentPayingThroughTheExternalDoorStillBurns() public {
+        _approveMeter(WALLET_A, 2_000_000);
+        uint256 burnedBefore = ledger.burned6(alice);
+
+        vm.prank(WALLET_A);
+        vm.recordLogs();
+        meter.payExternal(bob, 2_000_000, keccak256("sideways-1"));
+
+        assertEq(ledger.burned6(alice) - burnedBefore, 2_000_000, "the payer's burn is booked");
+        assertEq(ledger.earned6(bob), 2_000_000, "the provider's earn is booked");
+        assertFalse(_lastSelfDealt(), "different operators, so not self-dealing");
+    }
+
+    /// R5 through the external door: an operator buying from its own agent is
+    /// self-dealing even though its wallet is not itself an agent.
+    function test_anOperatorBuyingFromItsOwnAgentIsMarked() public {
+        usdc.mint(OPERATOR_A, 3_000_000);
+
+        vm.startPrank(OPERATOR_A);
+        usdc.approve(address(meter), 3_000_000);
+        vm.recordLogs();
+        meter.payExternal(alice, 3_000_000, keccak256("op-buys-1"));
+        vm.stopPrank();
+
+        assertTrue(_lastSelfDealt(), "an operator buying from its own agent is marked");
+        assertEq(ledger.earned6(alice), 3_000_000, "the dollars are real, the mark is the answer");
+    }
+
+    /// Two agents under one operator, reached through the external door.
+    function test_twinAgentsAreMarkedThroughTheExternalDoor() public {
+        _approveMeter(WALLET_A, 1_500_000);
+
+        vm.prank(WALLET_A);
+        vm.recordLogs();
+        meter.payExternal(aliceTwin, 1_500_000, keccak256("twin-ext-1"));
+
+        assertTrue(_lastSelfDealt(), "same operator on both sides");
+    }
+
     function test_receiptIsWrittenForTheX402Server() public {
         _approveMeter(WALLET_A, 1_000_000);
         bytes32 requestHash = keccak256("req-4");

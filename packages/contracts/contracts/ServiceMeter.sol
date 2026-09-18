@@ -81,8 +81,30 @@ contract ServiceMeter is Ownable, ReentrancyGuard {
     }
 
     /// A human (or any non-agent contract) pays an agent. payerAgentId == 0.
+    ///
+    /// The caller is resolved against the registry rather than trusted to be a
+    /// stranger. Skipping that resolution was an unlimited money printer: an
+    /// agent could call this with its OWN id, `safeTransferFrom(w, w, x)` moves
+    /// nothing, and because payerAgentId was hardcoded to 0 the BURN leg was
+    /// skipped and only the EARN was booked. Repeat with fresh request hashes
+    /// and rank by `earned6 - burned6` becomes meaningless.
     function payExternal(uint256 providerAgentId, uint256 amount6, bytes32 requestHash) external nonReentrant {
-        _settle(0, providerAgentId, msg.sender, amount6, requestHash, false);
+        uint256 payerAgentId = registry.agentOf(msg.sender);
+        if (payerAgentId == providerAgentId) revert SelfPayment(providerAgentId);
+
+        bool selfDealt;
+        if (payerAgentId != 0) {
+            // An agent reached this through the external door. Book it exactly as
+            // payForService would: both legs, and R5's self-deal mark.
+            if (!registry.isAlive(payerAgentId)) revert PayerNotAlive(payerAgentId);
+            selfDealt = registry.agentOperator(payerAgentId) == registry.agentOperator(providerAgentId);
+        } else {
+            // R5 again: an operator funding its own agent through the service
+            // door is self-dealing even though the wallet is not itself an agent.
+            selfDealt = msg.sender == registry.agentOperator(providerAgentId);
+        }
+
+        _settle(payerAgentId, providerAgentId, msg.sender, amount6, requestHash, selfDealt);
     }
 
     function _settle(
@@ -99,6 +121,7 @@ contract ServiceMeter is Ownable, ReentrancyGuard {
         if (!registry.isAlive(providerAgentId)) revert ProviderNotAlive(providerAgentId);
 
         address providerWallet = registry.agentWallet(providerAgentId);
+        if (payer == providerWallet) revert SelfPayment(providerAgentId);
         uint64 nowSeconds = uint64(block.timestamp);
 
         _receipts[requestHash] = Receipt({providerAgentId: providerAgentId, amount6: amount6, at: nowSeconds});

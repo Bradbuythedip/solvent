@@ -41,15 +41,39 @@ async function get<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
- * Every read goes through here. If the indexer is down we fall back to the same
- * deterministic simulator the indexer itself runs in demo mode, so the site is
- * never a blank error page — but `mode` then reports `demo` and the UI is
- * REQUIRED to render the DEMO marker. Simulated dollars are never shown as real.
+ * Is the indexer reachable at all right now?
+ *
+ * This exists to keep the fallback ALL-OR-NOTHING. Falling back per endpoint was
+ * the worst bug this product could carry: if /api/health succeeded (reporting
+ * `live`) while /api/agents happened to fail, the page rendered simulated
+ * dollars underneath a LIVE marker. Simulated money must never be presented as
+ * real, so the rule is now: either the indexer is up and an endpoint failure is
+ * an honest error, or it is down and EVERYTHING — health included — comes from
+ * the simulator, which makes `mode` report `demo` and puts the marker on screen.
+ *
+ * Deliberately not memoised across requests: a process that was healthy once
+ * must not keep claiming it.
  */
+async function indexerIsUp(): Promise<boolean> {
+  try {
+    const res = await fetch(`${INDEXER_URL}/api/health`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(3_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 async function getOrSimulate<T>(path: string, simulate: () => Promise<T> | T): Promise<T> {
   try {
     return await get<T>(path);
-  } catch {
+  } catch (error) {
+    // One endpoint failed. If the indexer is otherwise alive this is a real
+    // error and must surface as one — substituting simulated data here is how
+    // fake dollars end up wearing a LIVE badge.
+    if (await indexerIsUp()) throw error;
     return await simulate();
   }
 }
