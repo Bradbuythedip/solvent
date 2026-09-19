@@ -555,7 +555,7 @@ function makeProfile(rng: Rng): Profile {
     bountyBias: 0.08,
     // Centred just under break-even, so the modal agent scrapes along and rent
     // decides it. A third or so can actually cover their costs; the rest are the feed.
-    marginBps: BigInt(Math.round(rng.logRange(0.45, 1.9) * 10_000)),
+    marginBps: BigInt(Math.max(1, Math.round(rng.logRange(0.45, 1.9) * 10_000))),
   };
   switch (kind) {
     case 'servicer':
@@ -1089,6 +1089,7 @@ function stepAgent(s: State, a: SimAgent, rng: Rng, out: AdvanceResult): void {
       );
       if (provider) {
         push(book(s, provider, null, 'EARN', 'SERVICE', amount, a.wallet, `x402 ${service} · served${mark}`, s.now, txHash));
+        consumeCostFor(provider, amount);
       }
     }
   }
@@ -1108,10 +1109,12 @@ function stepAgent(s: State, a: SimAgent, rng: Rng, out: AdvanceResult): void {
   // most of itself. Without a renewal every agent dies of allowance exhaustion inside
   // thirty days however well it trades, and the feed stops being about money. Refusing
   // to renew is the other half: a lapsed approval is death, not an escape (SPEC 3.3).
-  if (a.allowance6 < rentFor(APPROVAL_LOW_SECONDS) && per(APPROVAL_REVIEWS_PER_HOUR)) {
-    if (a.earned6 * 2n >= a.burned6) {
-      a.allowance6 += rentFor(rng.logRange(3 * DAY, 30 * DAY));
-    }
+  if (
+    a.allowance6 < rentFor(APPROVAL_LOW_SECONDS) &&
+    per(APPROVAL_REVIEWS_PER_HOUR) &&
+    a.earned6 * 2n >= a.burned6
+  ) {
+    a.allowance6 += rentFor(rng.logRange(3 * DAY, 30 * DAY));
   }
 
   // A wallet this close to broke is worth the kill bounty, so reapers poll it hard.
@@ -1152,13 +1155,27 @@ function earnAgainstCost(a: SimAgent, want6: bigint): bigint {
   return (cost6 * m) / 10_000n;
 }
 
+/**
+ * The same coupling for revenue whose size the agent did not choose: an inbound x402
+ * order, booked at the payer's price under R4. Filling it consumes the work it took,
+ * so a provider selling under its own cost drains its capacity and drops out of
+ * pickProvider, instead of collecting a free transfer for ever.
+ */
+function consumeCostFor(a: SimAgent, revenue6: bigint): void {
+  const cost6 = (revenue6 * 10_000n) / a.profile.marginBps;
+  a.workCredit6 = a.workCredit6 > cost6 ? a.workCredit6 - cost6 : 0n;
+}
+
 function jitter(rng: Rng, amount6: bigint): bigint {
   const scaled = (amount6 * BigInt(rng.int(45, 190))) / 100n;
   return scaled > 0n ? scaled : 1n;
 }
 
+/** Only an agent with capacity in hand can fill an order; the rest buy from a vendor. */
 function pickProvider(s: State, rng: Rng, payer: SimAgent): SimAgent | null {
-  const alive = s.agents.filter((x) => x.status === 'ALIVE' && x.id !== payer.id && x.endpoint !== null);
+  const alive = s.agents.filter(
+    (x) => x.status === 'ALIVE' && x.id !== payer.id && x.endpoint !== null && x.workCredit6 > 0n,
+  );
   if (alive.length === 0) return null;
   return rng.pick(alive);
 }
